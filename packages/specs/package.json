@@ -1,0 +1,28 @@
+{
+  "name": "@agnap/specs",
+  "version": "0.1.0",
+  "description": "OpenAPI and JSON Schema specifications for the AGNAP authorization server and vault",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "openapi",
+    "schema",
+    "VERSION",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "exports": {
+    "./openapi/as.yaml": "./openapi/as.yaml",
+    "./openapi/vault.yaml": "./openapi/vault.yaml",
+    "./schema/authority.json": "./schema/authority.json",
+    "./schema/delegation.json": "./schema/delegation.json",
+    "./VERSION": "./VERSION"
+  },
+  "scripts": {
+    "lint": "redocly lint openapi/as.yaml openapi/vault.yaml --format=stylish",
+    "build": "echo '@agnap/specs has nothing to build'"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^2.51.2"
+  }
+}

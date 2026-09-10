@@ -1,0 +1,59 @@
+name: Specification problem
+description: Report an ambiguity, inconsistency, or defect in the published specifications.
+title: '[spec problem]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reviewing AGNAP. Do not disclose security vulnerabilities here; use private vulnerability reporting instead.
+  - type: dropdown
+    id: artifact
+    attributes:
+      label: Affected artifact
+      options:
+        - Authorization Server OpenAPI
+        - Vault OpenAPI
+        - Authority schema
+        - Delegation schema
+        - Documentation
+        - Multiple artifacts
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: File, schema name, operation, field, or line link.
+      placeholder: packages/specs/schema/authority.json — ValidityWindow
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is ambiguous, inconsistent, or incorrect?
+    validations:
+      required: true
+  - type: textarea
+    id: consequence
+    attributes:
+      label: Interoperability or security consequence
+      description: How could independent implementations interpret this differently?
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction
+      description: Optional wording, schema change, or test case.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I agree to follow the Code of Conduct.
+          required: true

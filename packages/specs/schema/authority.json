@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agnap.dev/schema/authority.json",
+  "title": "Authority",
+  "description": "The AGNAP authority model. An authority is a GNAP access object of type `agent_operation`. It names the operations an agent may invoke at a vault and, for every argument of every operation, the constraint that argument must satisfy. Arguments not named are not permitted (closed world). Ceilings bound the cumulative use of an operation across calls. Wire messages reference `#/$defs/AgentOperationAccess` directly; the root is a one-member union so that generators emit every definition.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/AgentOperationAccess"
+    }
+  ],
+  "$defs": {
+    "Scalar": {
+      "title": "Scalar",
+      "description": "A JSON scalar that an argument is compared against. Numbers compare as JSON numbers, strings byte-wise; there is no coercion between types.",
+      "type": ["string", "number", "boolean"]
+    },
+    "OperationName": {
+      "title": "OperationName",
+      "description": "The name of an operation exposed by a vault connector, for example `record.read` or `create_payment`.",
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "ArgumentName": {
+      "title": "ArgumentName",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+    },
+    "ExactConstraint": {
+      "title": "ExactConstraint",
+      "description": "The argument must equal this value. The only constraint milestone 1 evaluates.",
+      "type": "object",
+      "properties": {
+        "exact": {
+          "$ref": "#/$defs/Scalar"
+        }
+      },
+      "required": ["exact"],
+      "additionalProperties": false
+    },
+    "RangeConstraint": {
+      "title": "RangeConstraint",
+      "description": "The argument is a decimal amount string within [min, max]. `currency` is an ISO 4217 code and must match the argument's currency when the argument is an amount object.",
+      "type": "object",
+      "properties": {
+        "range": {
+          "type": "object",
+          "properties": {
+            "min": {
+              "$ref": "#/$defs/DecimalString"
+            },
+            "max": {
+              "$ref": "#/$defs/DecimalString"
+            },
+            "currency": {
+              "$ref": "#/$defs/CurrencyCode"
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1,
+          "description": "At least one bound. `min` and `max` are inclusive."
+        }
+      },
+      "required": ["range"],
+      "additionalProperties": false
+    },
+    "OneOfConstraint": {
+      "title": "OneOfConstraint",
+      "description": "The argument must equal one of the listed values.",
+      "type": "object",
+      "properties": {
+        "one_of": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scalar"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": ["one_of"],
+      "additionalProperties": false
+    },
+    "NotOneOfConstraint": {
+      "title": "NotOneOfConstraint",
+      "description": "The argument must not equal any of the listed values.",
+      "type": "object",
+      "properties": {
+        "not_one_of": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scalar"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": ["not_one_of"],
+      "additionalProperties": false
+    },
+    "ContainsConstraint": {
+      "title": "ContainsConstraint",
+      "description": "The argument is an array that contains this value.",
+      "type": "object",
+      "properties": {
+        "contains": {
+          "$ref": "#/$defs/Scalar"
+        }
+      },
+      "required": ["contains"],
+      "additionalProperties": false
+    },
+    "SubsetConstraint": {
+      "title": "SubsetConstraint",
+      "description": "The argument is an array whose every element is one of the listed values.",
+      "type": "object",
+      "properties": {
+        "subset": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scalar"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": ["subset"],
+      "additionalProperties": false
+    },
+    "WildcardConstraint": {
+      "title": "WildcardConstraint",
+      "description": "Any value is accepted for this argument. Naming an argument with a wildcard is how an authority admits an argument it does not otherwise constrain.",
+      "type": "object",
+      "properties": {
+        "wildcard": {
+          "const": true
+        }
+      },
+      "required": ["wildcard"],
+      "additionalProperties": false
+    },
+    "DomainInConstraint": {
+      "title": "DomainInConstraint",
+      "description": "AGNAP extension to the AAT constraint vocabulary. The argument is a URL or email address whose host is one of the listed domains or a subdomain of one.",
+      "type": "object",
+      "properties": {
+        "domain_in": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "hostname"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": ["domain_in"],
+      "additionalProperties": false
+    },
+    "PrefixInConstraint": {
+      "title": "PrefixInConstraint",
+      "description": "AGNAP extension to the AAT constraint vocabulary. The argument is a string that starts with one of the listed prefixes.",
+      "type": "object",
+      "properties": {
+        "prefix_in": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": ["prefix_in"],
+      "additionalProperties": false
+    },
+    "Constraint": {
+      "title": "Constraint",
+      "description": "Exactly one constraint applies to each named argument.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ExactConstraint"
+        },
+        {
+          "$ref": "#/$defs/RangeConstraint"
+        },
+        {
+          "$ref": "#/$defs/OneOfConstraint"
+        },
+        {
+          "$ref": "#/$defs/NotOneOfConstraint"
+        },
+        {
+          "$ref": "#/$defs/ContainsConstraint"
+        },
+        {
+          "$ref": "#/$defs/SubsetConstraint"
+        },
+        {
+          "$ref": "#/$defs/WildcardConstraint"
+        },
+        {
+          "$ref": "#/$defs/DomainInConstraint"
+        },
+        {
+          "$ref": "#/$defs/PrefixInConstraint"
+        }
+      ]
+    },
+    "OperationConstraints": {
+      "title": "OperationConstraints",
+      "description": "Constraints for one operation, keyed by argument name. An empty object permits the operation with no arguments.",
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/ArgumentName"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/Constraint"
+      }
+    },
+    "DecimalString": {
+      "title": "DecimalString",
+      "description": "A non-negative decimal amount as a string, so that no precision is lost in JSON.",
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?$"
+    },
+    "CurrencyCode": {
+      "title": "CurrencyCode",
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "CallCeiling": {
+      "title": "CallCeiling",
+      "description": "The operation may be invoked at most `calls` times under this authority and everything derived from it.",
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": ["calls"],
+      "additionalProperties": false
+    },
+    "AmountCeiling": {
+      "title": "AmountCeiling",
+      "description": "The named amount argument may sum to at most `total` across all invocations under this authority and everything derived from it.",
+      "type": "object",
+      "properties": {
+        "total": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "currency": {
+          "$ref": "#/$defs/CurrencyCode"
+        }
+      },
+      "required": ["total", "currency"],
+      "additionalProperties": false
+    },
+    "Ceiling": {
+      "title": "Ceiling",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CallCeiling"
+        },
+        {
+          "$ref": "#/$defs/AmountCeiling"
+        }
+      ]
+    },
+    "Ceilings": {
+      "title": "Ceilings",
+      "description": "Keyed by operation name for call ceilings (`send_email`) or by `operation.argument` for amount ceilings (`create_payment.amount`). Ceilings are conserved across a delegation tree: children draw from the parent's remaining budget.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}(\\.[A-Za-z_][A-Za-z0-9_]{0,63})?$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/Ceiling"
+      }
+    },
+    "ValidityWindow": {
+      "title": "ValidityWindow",
+      "description": "AGNAP extension. Absolute time window in which this authority may be exercised, evaluated against the resource server's trusted clock. This is distinct from the GNAP access token response's `expires_in`. `not_before` is inclusive and `not_after` is exclusive. When both are present, `not_before` MUST be earlier than `not_after`. A delegated authority's window MUST be contained within its parent's window.",
+      "type": "object",
+      "properties": {
+        "not_before": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The authority cannot be exercised before this instant. Inclusive."
+        },
+        "not_after": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The authority cannot be exercised at or after this instant. Exclusive."
+        }
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
+    "AgentOperationAccess": {
+      "title": "AgentOperationAccess",
+      "description": "A GNAP access object (RFC 9635 section 8) of type `agent_operation`.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "agent_operation"
+        },
+        "operations": {
+          "type": "object",
+          "description": "The operations this authority permits, keyed by operation name.",
+          "propertyNames": {
+            "$ref": "#/$defs/OperationName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/OperationConstraints"
+          },
+          "minProperties": 1
+        },
+        "ceilings": {
+          "$ref": "#/$defs/Ceilings"
+        },
+        "validity": {
+          "$ref": "#/$defs/ValidityWindow"
+        }
+      },
+      "required": ["type", "operations"],
+      "additionalProperties": false
+    }
+  }
+}

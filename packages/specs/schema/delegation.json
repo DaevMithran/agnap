@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agnap.dev/schema/delegation.json",
+  "title": "Delegation",
+  "description": "AGNAP extension to GNAP. A parent agent spawns a child by signing a delegation assertion with the key its own access token is bound to. The child presents the assertion in a normal grant request. The authorization server verifies it, checks that the child's authority is contained in the parent's, and returns a signed receipt. Types only in milestone 1; nothing here is processed yet. The root of this schema is the union of the four artefacts so that generators emit every definition; wire messages reference the definitions directly.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/DelegationEnvelope"
+    },
+    {
+      "$ref": "#/$defs/DelegationAssertionClaims"
+    },
+    {
+      "$ref": "#/$defs/DelegationReceipt"
+    },
+    {
+      "$ref": "#/$defs/DelegationPolicy"
+    }
+  ],
+  "$defs": {
+    "DelegationRef": {
+      "title": "DelegationRef",
+      "description": "A stable, opaque identifier for one node in a delegation tree. It survives token rotation, which the token value hash does not. The authorization server issues it and callers treat it as opaque.",
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "Sha256Base64Url": {
+      "title": "Sha256Base64Url",
+      "description": "SHA-256 digest, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "DelegationEnvelope": {
+      "title": "DelegationEnvelope",
+      "description": "AGNAP extension. Carried in the `delegation` field of a grant request. The assertion is a compact JWS whose payload is `DelegationAssertionClaims`, signed with the parent's bound key.",
+      "type": "object",
+      "properties": {
+        "assertion": {
+          "type": "string",
+          "description": "Compact JWS serialization.",
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+        }
+      },
+      "required": ["assertion"],
+      "additionalProperties": false
+    },
+    "DelegationAssertionClaims": {
+      "title": "DelegationAssertionClaims",
+      "description": "Payload of the assertion a parent signs to spawn a child. Verified by the authorization server in the order: aud, iat and exp; jti unused; parent_ref resolves to an active, non-revoked token whose bound key produced the signature and whose value hash matches parent_token_hash when present; child_key_thumbprint equals the requesting key; depth below the policy maximum; child expiry within the parent's; requested access and ceilings contained in the parent's.",
+      "type": "object",
+      "properties": {
+        "parent_ref": {
+          "$ref": "#/$defs/DelegationRef"
+        },
+        "parent_token_hash": {
+          "$ref": "#/$defs/Sha256Base64Url",
+          "description": "Optional evidence that the parent held the token value when it signed. Not used for lookup because it changes on rotation."
+        },
+        "child_key_thumbprint": {
+          "$ref": "#/$defs/Sha256Base64Url",
+          "description": "RFC 7638 thumbprint of the child's public key. The child generates its own key pair; the parent only ever sees the public half."
+        },
+        "access": {
+          "type": "array",
+          "items": {
+            "$ref": "authority.json#/$defs/AgentOperationAccess"
+          },
+          "minItems": 1
+        },
+        "ceilings": {
+          "$ref": "authority.json#/$defs/Ceilings"
+        },
+        "aud": {
+          "type": "string",
+          "format": "uri",
+          "description": "The grant endpoint of the authorization server that issued the parent token."
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exp": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Short lived. The assertion is single use; exp bounds how long the jti must be remembered."
+        },
+        "jti": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128
+        }
+      },
+      "required": ["parent_ref", "child_key_thumbprint", "access", "aud", "iat", "exp", "jti"],
+      "additionalProperties": false
+    },
+    "DelegationReceipt": {
+      "title": "DelegationReceipt",
+      "description": "Signed by the authorization server after a child grant is issued. Returned in the grant response and available through introspection. A verifier that trusts the authorization server's key can check the lineage of any token without calling back.",
+      "type": "object",
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128
+        },
+        "parent_ref": {
+          "$ref": "#/$defs/DelegationRef"
+        },
+        "child_ref": {
+          "$ref": "#/$defs/DelegationRef"
+        },
+        "parent_token_hash": {
+          "$ref": "#/$defs/Sha256Base64Url"
+        },
+        "child_token_hash": {
+          "$ref": "#/$defs/Sha256Base64Url"
+        },
+        "child_key_thumbprint": {
+          "$ref": "#/$defs/Sha256Base64Url"
+        },
+        "assertion_jti": {
+          "type": "string"
+        },
+        "access": {
+          "type": "array",
+          "items": {
+            "$ref": "authority.json#/$defs/AgentOperationAccess"
+          },
+          "minItems": 1
+        },
+        "ceilings": {
+          "$ref": "authority.json#/$defs/Ceilings"
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "root_grant": {
+          "type": "string"
+        },
+        "escalated": {
+          "type": "boolean",
+          "description": "True when the child's authority was not contained in the parent's and the owner approved the widening through GNAP interaction, per `delegation_policy.on_widen`."
+        },
+        "iat": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "receipt_id",
+        "parent_ref",
+        "child_ref",
+        "child_key_thumbprint",
+        "assertion_jti",
+        "access",
+        "depth",
+        "root_grant",
+        "escalated",
+        "iat"
+      ],
+      "additionalProperties": false
+    },
+    "DelegationPolicy": {
+      "title": "DelegationPolicy",
+      "description": "Set by the owner on the root grant. Governs every spawn beneath it.",
+      "type": "object",
+      "properties": {
+        "on_widen": {
+          "type": "string",
+          "enum": ["reject", "escalate"],
+          "description": "What the authorization server does when a child requests authority not contained in its parent's. `reject` fails the grant. `escalate` returns a GNAP interaction so the owner can approve the widening."
+        },
+        "max_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        }
+      },
+      "required": ["on_widen", "max_depth"],
+      "additionalProperties": false
+    }
+  }
+}

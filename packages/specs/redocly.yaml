@@ -1,0 +1,13 @@
+extends:
+  - recommended
+rules:
+  # Every request and response body must live in components so the runtime
+  # validator and the generated types share one name for each shape.
+  no-unused-components: error
+  operation-operationId: error
+  operation-summary: error
+  no-ambiguous-paths: error
+  security-defined: off
+
+  # Local development servers are loopback on purpose; the description says so.
+  no-server-example.com: off

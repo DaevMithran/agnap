@@ -1,0 +1,587 @@
+openapi: 3.1.0
+info:
+  title: AGNAP Authorization Server
+  version: 0.1.0
+  license:
+    name: Apache 2.0
+    identifier: Apache-2.0
+  summary: GNAP authorization server for agent authority
+  description: |-
+    The authorization server issues key-bound access tokens whose `access`
+    describes what an agent may do at a vault, using
+    [GNAP, RFC 9635](https://www.rfc-editor.org/rfc/rfc9635) for grant
+    negotiation and [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767) for
+    introspection by the vault. It holds no downstream credentials.
+
+    This document starts from the Open Payments `auth-server.yaml` and records
+    every departure in `CHANGELOG.md`. Fields marked **AGNAP extension** are
+    not in RFC 9635 or RFC 9767.
+
+    Every request is signed with the `httpsig` proofing method
+    (RFC 9635 section 7.3.1, RFC 9421, RFC 9530). The signature covers
+    `@method`, `@target-uri`, `content-digest` and, when present,
+    `authorization`, with the parameters `created`, `nonce`, `keyid` and
+    `tag="gnap"`.
+
+    **Endpoints in this version**
+    - `POST /` initiate a grant request
+    - `POST /introspect` resource server introspection
+
+    Continuation, token management and resource registration are deferred to
+    the version that implements interaction and delegation.
+  contact:
+    url: https://github.com/daevmithran/agnap
+servers:
+  - url: http://localhost:4000
+    description: Local development. Loopback HTTP is non-conformant; any conformance claim requires HTTPS.
+tags:
+  - name: grant
+    description: Grant negotiation (RFC 9635)
+  - name: introspection
+    description: Resource server introspection (RFC 9767)
+paths:
+  /:
+    post:
+      summary: Grant request
+      operationId: grant
+      description: |-
+        Make a new grant request (RFC 9635 section 2). The request must be
+        signed with the key carried in `client.key`. In this version the
+        authorization server applies a fixed, pre-approved policy and either
+        returns an access token bound to that key or an error. No interaction
+        or continuation is offered.
+      tags: [grant]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantRequest'
+            examples:
+              Agent operation:
+                value:
+                  access_token:
+                    access:
+                      - type: agent_operation
+                        operations:
+                          record.read:
+                            record_id:
+                              exact: demo-001
+                  client:
+                    key:
+                      proof: httpsig
+                      jwk:
+                        kid: agent-key-1
+                        alg: EdDSA
+                        kty: OKP
+                        crv: Ed25519
+                        x: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo
+      responses:
+        '200':
+          description: Grant approved and an access token issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantResponse'
+              examples:
+                Approved:
+                  value:
+                    access_token:
+                      value: OS9M2PMHKUR64TB8N6BW7OZB8CDFONP219RP1LT0
+                      expires_in: 3600
+                      access:
+                        - type: agent_operation
+                          operations:
+                            record.read:
+                              record_id:
+                                exact: demo-001
+        '400':
+          description: The request is malformed or asks for a flag the server does not support.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: The request signature did not verify against `client.key`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The policy denied the requested access.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /introspect:
+    post:
+      summary: Token introspection
+      operationId: introspect
+      description: |-
+        Resource server introspection (RFC 9767 section 3.3). The resource
+        server signs the request with its own key, which the authorization
+        server must already trust. The response states whether the token is
+        active and, if so, its access and the key it is bound to.
+      tags: [introspection]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntrospectionRequest'
+      responses:
+        '200':
+          description: Introspection result. An inactive token yields only the `active` field, set to false.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntrospectionResponse'
+        '400':
+          description: Malformed request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: The resource server signature did not verify or the key is not trusted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    GrantRequest:
+      title: GrantRequest
+      description: RFC 9635 section 2. Closed object; `delegation` is the one AGNAP extension field.
+      type: object
+      properties:
+        access_token:
+          description: One or more access token requests (RFC 9635 section 2.1).
+          oneOf:
+            - $ref: '#/components/schemas/AccessTokenRequest'
+            - type: array
+              items:
+                $ref: '#/components/schemas/AccessTokenRequest'
+              minItems: 1
+        client:
+          $ref: '#/components/schemas/Client'
+        interact:
+          $ref: '#/components/schemas/InteractRequest'
+        subject:
+          $ref: '#/components/schemas/SubjectRequest'
+        delegation:
+          description: AGNAP extension. Present when a child agent is requesting a grant beneath a parent's. Rejected with `invalid_request` in this version.
+          $ref: '../schema/delegation.json#/$defs/DelegationEnvelope'
+      required: [access_token, client]
+      additionalProperties: false
+    AccessTokenRequest:
+      title: AccessTokenRequest
+      description: RFC 9635 section 2.1.1.
+      type: object
+      properties:
+        access:
+          $ref: '#/components/schemas/Access'
+        label:
+          type: string
+          description: Required when more than one access token is requested.
+        flags:
+          type: array
+          items:
+            type: string
+            enum: [bearer]
+          uniqueItems: true
+          description: The `bearer` flag is refused with `invalid_flag`; every token this server issues is bound to the client key.
+      required: [access]
+      additionalProperties: false
+    Access:
+      title: Access
+      description: RFC 9635 section 8. Each item is a reference string known to the authorization server or an access object.
+      type: array
+      items:
+        $ref: '#/components/schemas/AccessItem'
+      minItems: 1
+    AccessItem:
+      title: AccessItem
+      oneOf:
+        - type: string
+          description: Reference to an access object pre-registered at the authorization server.
+        - $ref: '#/components/schemas/AgentOperationAccess'
+        - $ref: '#/components/schemas/GenericAccess'
+    AgentOperationAccess:
+      title: AgentOperationAccess
+      description: The AGNAP authority model, defined in `schema/authority.json`.
+      $ref: '../schema/authority.json#/$defs/AgentOperationAccess'
+    GenericAccess:
+      title: GenericAccess
+      description: Any RFC 9635 access object other than `agent_operation`. Extension point; the access type defines which additional fields are meaningful. The fixed policy in this version denies these.
+      type: object
+      properties:
+        type:
+          type: string
+          not:
+            const: agent_operation
+        actions:
+          type: array
+          items:
+            type: string
+        locations:
+          type: array
+          items:
+            type: string
+            format: uri
+        datatypes:
+          type: array
+          items:
+            type: string
+        identifier:
+          type: string
+        privileges:
+          type: array
+          items:
+            type: string
+      required: [type]
+      additionalProperties: true
+    Client:
+      title: Client
+      description: RFC 9635 section 2.3. The instance identifier string of a client known to the authorization server, or a client instance object carrying its key.
+      oneOf:
+        - type: string
+          minLength: 1
+        - $ref: '#/components/schemas/ClientInstance'
+    ClientInstance:
+      title: ClientInstance
+      type: object
+      properties:
+        key:
+          $ref: '#/components/schemas/Key'
+        class_id:
+          type: string
+        display:
+          $ref: '#/components/schemas/ClientDisplay'
+      required: [key]
+      additionalProperties: false
+    ClientDisplay:
+      title: ClientDisplay
+      type: object
+      properties:
+        name:
+          type: string
+        uri:
+          type: string
+          format: uri
+        logo_uri:
+          type: string
+          format: uri
+      additionalProperties: false
+    Key:
+      title: Key
+      description: RFC 9635 section 7.1. A key reference string or a key object. This version accepts JWK Ed25519 keys and the `httpsig` proofing method only.
+      oneOf:
+        - type: string
+          minLength: 1
+        - $ref: '#/components/schemas/KeyObject'
+    KeyObject:
+      title: KeyObject
+      type: object
+      properties:
+        proof:
+          $ref: '#/components/schemas/Proof'
+        jwk:
+          $ref: '#/components/schemas/Ed25519PublicJwk'
+      required: [proof, jwk]
+      additionalProperties: false
+    Proof:
+      title: Proof
+      description: RFC 9635 section 7.3. String form or the parameterised object form.
+      oneOf:
+        - type: string
+          enum: [httpsig]
+        - type: object
+          properties:
+            method:
+              type: string
+              enum: [httpsig]
+            alg:
+              type: string
+              enum: [ed25519]
+              description: RFC 9421 signature algorithm.
+            content-digest-alg:
+              type: string
+              enum: [sha-256]
+              description: RFC 9530 digest algorithm.
+          required: [method]
+          additionalProperties: false
+    Ed25519PublicJwk:
+      title: Ed25519PublicJwk
+      description: RFC 9635 section 7.1.1 requires `kid` and `alg` in a JWK. Taken unchanged from Open Payments.
+      type: object
+      properties:
+        kid:
+          type: string
+          minLength: 1
+        alg:
+          type: string
+          enum: [EdDSA]
+        use:
+          type: string
+          enum: [sig]
+        kty:
+          type: string
+          enum: [OKP]
+        crv:
+          type: string
+          enum: [Ed25519]
+        x:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: The base64url encoded public key.
+      required: [kid, alg, kty, crv, x]
+      additionalProperties: false
+    InteractRequest:
+      title: InteractRequest
+      description: RFC 9635 section 2.5. Accepted for shape compatibility; the fixed policy approves without interaction and ignores it.
+      type: object
+      properties:
+        start:
+          type: array
+          items:
+            type: string
+            enum: [redirect, app, user_code, user_code_uri]
+          minItems: 1
+        finish:
+          type: object
+          properties:
+            method:
+              type: string
+              enum: [redirect, push]
+            uri:
+              type: string
+              format: uri
+            nonce:
+              type: string
+              minLength: 1
+            hash_method:
+              type: string
+          required: [method, uri, nonce]
+          additionalProperties: false
+      required: [start]
+      additionalProperties: false
+    SubjectRequest:
+      title: SubjectRequest
+      description: RFC 9635 section 2.2. Accepted for shape compatibility; no subject information is returned in this version.
+      type: object
+      properties:
+        sub_id_formats:
+          type: array
+          items:
+            type: string
+        assertion_formats:
+          type: array
+          items:
+            type: string
+      additionalProperties: false
+    GrantResponse:
+      title: GrantResponse
+      description: RFC 9635 section 3. This version returns a single `access_token` and no `continue`.
+      type: object
+      properties:
+        access_token:
+          oneOf:
+            - $ref: '#/components/schemas/AccessToken'
+            - type: array
+              items:
+                $ref: '#/components/schemas/AccessToken'
+              minItems: 1
+        continue:
+          $ref: '#/components/schemas/Continue'
+        instance_id:
+          type: string
+        delegation_ref:
+          description: AGNAP extension. The stable reference for this token's node in the delegation tree. Not emitted in this version.
+          $ref: '../schema/delegation.json#/$defs/DelegationRef'
+        receipt:
+          type: string
+          description: AGNAP extension. Compact JWS signed by the authorization server whose payload is a `DelegationReceipt`. Present only for delegated grants. Not emitted in this version.
+      required: [access_token]
+      additionalProperties: false
+    AccessToken:
+      title: AccessToken
+      description: RFC 9635 section 3.2.1. Tokens are bound to the client key unless `flags` contains `bearer`, which this server never sets.
+      type: object
+      properties:
+        value:
+          type: string
+          minLength: 1
+          description: Opaque to the client.
+        label:
+          type: string
+        manage:
+          $ref: '#/components/schemas/TokenManagement'
+        access:
+          $ref: '#/components/schemas/Access'
+        expires_in:
+          type: integer
+          minimum: 1
+        key:
+          description: Present only when the token is bound to a key other than the client's.
+          oneOf:
+            - type: boolean
+              const: false
+            - $ref: '#/components/schemas/Key'
+        flags:
+          type: array
+          items:
+            type: string
+            enum: [bearer, durable]
+          uniqueItems: true
+      required: [value, access]
+      additionalProperties: false
+    TokenManagement:
+      title: TokenManagement
+      description: RFC 9635 section 3.2.1 `manage` object.
+      type: object
+      properties:
+        uri:
+          type: string
+          format: uri
+        access_token:
+          type: object
+          properties:
+            value:
+              type: string
+          required: [value]
+          additionalProperties: false
+      required: [uri, access_token]
+      additionalProperties: false
+    Continue:
+      title: Continue
+      description: RFC 9635 section 3.1.
+      type: object
+      properties:
+        uri:
+          type: string
+          format: uri
+        wait:
+          type: integer
+          minimum: 0
+        access_token:
+          type: object
+          properties:
+            value:
+              type: string
+          required: [value]
+          additionalProperties: false
+      required: [uri, access_token]
+      additionalProperties: false
+    IntrospectionRequest:
+      title: IntrospectionRequest
+      description: RFC 9767 section 3.3.
+      type: object
+      properties:
+        access_token:
+          type: string
+          minLength: 1
+          description: The token value as presented to the resource server.
+        proof:
+          $ref: '#/components/schemas/Proof'
+        resource_server:
+          $ref: '#/components/schemas/ResourceServer'
+        access:
+          $ref: '#/components/schemas/Access'
+      required: [access_token, resource_server]
+      additionalProperties: false
+    ResourceServer:
+      title: ResourceServer
+      description: RFC 9767 section 3.3. The resource server's instance identifier or an object carrying its key.
+      oneOf:
+        - type: string
+          minLength: 1
+        - type: object
+          properties:
+            key:
+              $ref: '#/components/schemas/Key'
+          required: [key]
+          additionalProperties: false
+    IntrospectionResponse:
+      title: IntrospectionResponse
+      description: RFC 9767 section 3.3. When `active` is false no other field is present.
+      type: object
+      properties:
+        active:
+          type: boolean
+        access:
+          $ref: '#/components/schemas/Access'
+        key:
+          $ref: '#/components/schemas/Key'
+        flags:
+          type: array
+          items:
+            type: string
+            enum: [bearer, durable]
+        exp:
+          type: integer
+        iat:
+          type: integer
+        nbf:
+          type: integer
+        aud:
+          type: string
+        sub:
+          type: string
+        iss:
+          type: string
+        instance_id:
+          type: string
+        delegation_ref:
+          description: AGNAP extension. Not emitted in this version.
+          $ref: '../schema/delegation.json#/$defs/DelegationRef'
+        credential_refs:
+          type: array
+          items:
+            type: string
+          description: AGNAP extension. Credential references enrolled for this token. Not emitted in this version.
+        receipts:
+          type: array
+          items:
+            type: string
+          description: AGNAP extension. Receipt JWS chain from the root grant to this token. Not emitted in this version.
+      required: [active]
+      additionalProperties: false
+    ErrorResponse:
+      title: ErrorResponse
+      description: RFC 9635 section 3.6. This server always uses the object form.
+      type: object
+      properties:
+        error:
+          oneOf:
+            - $ref: '#/components/schemas/ErrorCode'
+            - type: object
+              properties:
+                code:
+                  $ref: '#/components/schemas/ErrorCode'
+                description:
+                  type: string
+              required: [code]
+              additionalProperties: false
+      required: [error]
+      additionalProperties: false
+    ErrorCode:
+      title: ErrorCode
+      description: RFC 9635 section 3.6 error codes.
+      type: string
+      enum:
+        - invalid_request
+        - invalid_client
+        - invalid_interaction
+        - invalid_flag
+        - invalid_rotation
+        - key_rotation_not_supported
+        - invalid_continuation
+        - user_denied
+        - request_denied
+        - unknown_user
+        - unknown_interaction
+        - too_fast
+        - too_many_attempts

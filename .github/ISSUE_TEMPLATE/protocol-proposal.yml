@@ -1,0 +1,52 @@
+name: Protocol proposal
+description: Propose a new capability or a material change to an AGNAP specification.
+title: '[proposal]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the use case and security invariant. A proposed wire shape is helpful, but not required.
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What agent workflow or interoperability need is not covered today?
+    validations:
+      required: true
+  - type: textarea
+    id: invariant
+    attributes:
+      label: Security invariant
+      description: What must remain impossible or bounded?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed protocol change
+      description: Describe the messages, fields, processing rules, or examples that should change.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration
+      description: How would existing implementations handle this change?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Could existing GNAP, OAuth, or AGNAP mechanisms express the same result?
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and proposals.
+          required: true
+        - label: I agree to follow the Code of Conduct.
+          required: true

@@ -1,0 +1,212 @@
+openapi: 3.1.0
+info:
+  title: AGNAP Vault
+  version: 0.1.0
+  license:
+    name: Apache 2.0
+    identifier: Apache-2.0
+  summary: The grant-mediated execution boundary (RS1)
+  description: |-
+    The vault is the GNAP resource server an agent actually calls. It never
+    hands a downstream credential to the agent. For every invocation it
+    verifies the token presentation (RFC 9635 section 7.2, `httpsig`), asks the
+    authorization server whether the token is active (RFC 9767 introspection),
+    checks the operation and its arguments against the token's authority,
+    resolves a credential reference it holds itself, performs the downstream
+    call through a connector and records the effect.
+
+    Operation names and their argument schemas are defined by the connectors a
+    deployment registers, so `args` is an open object here. The authority the
+    token carries is what closes it.
+
+    On a `401` the vault returns `WWW-Authenticate: GNAP as_uri="..."` so a
+    client can discover the authorization server (RFC 9635 section 9.1).
+  contact:
+    url: https://github.com/daevmithran/agnap
+servers:
+  - url: http://localhost:4001
+    description: Local development. Loopback HTTP is non-conformant; any conformance claim requires HTTPS.
+tags:
+  - name: operation
+    description: Typed operation invocation through a connector
+paths:
+  /op/{operation}:
+    parameters:
+      - name: operation
+        in: path
+        required: true
+        description: The operation name as registered by a connector, for example `record.read`.
+        schema:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'
+    post:
+      summary: Invoke an operation
+      operationId: invoke
+      description: |-
+        Invoke one operation under the presented token. The request carries
+        `Authorization: GNAP <token>` and an `httpsig` signature made with the
+        key the token is bound to, covering `@method`, `@target-uri`,
+        `content-digest` and `authorization`.
+      tags: [operation]
+      security:
+        - GNAP: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OperationRequest'
+            examples:
+              Read one record:
+                value:
+                  args:
+                    record_id: demo-001
+      responses:
+        '200':
+          description: The connector completed the operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '400':
+          description: Malformed body, or arguments that do not match the connector's argument schema.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or inactive token, signature failure, replayed nonce, or expired `created`.
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+              description: '`GNAP as_uri="<authorization server grant endpoint>"`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The token is valid but its authority does not permit this operation with these arguments. The body names the operation, argument and constraint that failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No registered connector exposes this operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: The downstream call failed with a definite error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '504':
+          description: The downstream call ended in an indeterminate state. The body carries a reference for reconciliation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The authorization server could not be reached for introspection, so the token's state is unknown. Nothing was executed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  securitySchemes:
+    GNAP:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: '`Authorization: GNAP <access token value>` plus an RFC 9421 signature (RFC 9635 section 7.2).'
+  schemas:
+    OperationRequest:
+      title: OperationRequest
+      type: object
+      properties:
+        args:
+          type: object
+          description: Extension point. The connector's operation schema defines the arguments; the token's authority constrains them.
+          additionalProperties: true
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Client supplied. Forwarded to the connector so an effectful operation can be retried safely. Required by the ledger phase for any operation flagged effectful.
+      required: [args]
+      additionalProperties: false
+    OperationResult:
+      title: OperationResult
+      type: object
+      properties:
+        outcome:
+          type: string
+          enum: [success]
+        result:
+          description: Connector defined.
+        correlation_id:
+          type: string
+          description: Matches the vault's audit record for this invocation.
+      required: [outcome, correlation_id]
+      additionalProperties: false
+    ErrorResponse:
+      title: ErrorResponse
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            description:
+              type: string
+            correlation_id:
+              type: string
+            decision:
+              $ref: '#/components/schemas/DenyReason'
+          required: [code]
+          additionalProperties: false
+      required: [error]
+      additionalProperties: false
+    ErrorCode:
+      title: ErrorCode
+      type: string
+      enum:
+        - invalid_request
+        - invalid_token
+        - invalid_proof
+        - replayed
+        - expired
+        - forbidden
+        - unknown_operation
+        - downstream_failure
+        - downstream_indeterminate
+        - authorization_server_unavailable
+    DenyReason:
+      title: DenyReason
+      description: Machine-readable reason an authority check failed. Never a bare boolean.
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - not_agent_operation
+            - unknown_operation
+            - missing_argument
+            - unexpected_argument
+            - constraint_failed
+            - unsupported_constraint
+            - undecidable
+        operation:
+          type: string
+        argument:
+          type: string
+        constraint:
+          type: string
+        detail:
+          type: string
+      required: [code, detail]
+      additionalProperties: false
