@@ -57,8 +57,13 @@ sequenceDiagram
     V->>AS: Introspect child token
     AS-->>V: Active authority, bound key, lineage, and credential reference
     V->>V: Check arguments and reserve shared ceiling
-    opt Downstream credential must be obtained or refreshed
-        V->>DAS: Request credential
+    alt Vault already holds a valid downstream credential
+        V->>V: Resolve the stored credential
+    else OAuth token exchange is configured
+        V->>DAS: RFC 8693 exchange for downstream audience and scope
+        DAS-->>V: Narrow downstream access token
+    else Another downstream authorization flow is required
+        V->>DAS: Obtain or refresh the required credential
         DAS-->>V: Credential accepted by downstream service
     end
     V->>DRS: Execute with downstream credential
@@ -76,3 +81,7 @@ The important invariants are:
 - Descendants share the ancestor's ceilings rather than receiving copies.
 - Revoking an ancestor makes its descendants unusable at the vault.
 - Downstream credentials never enter either agent runtime.
+
+See [Downstream credentials](downstream-credentials.md) for the distinction
+between existing credentials, OAuth token exchange, GNAP downstream-token
+derivation and native credential acquisition.

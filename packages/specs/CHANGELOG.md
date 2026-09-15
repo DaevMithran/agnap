@@ -37,6 +37,12 @@ Narrowed:
 
 - Only the `httpsig` proofing method and Ed25519 keys (`alg: EdDSA`) are
   accepted.
+- GNAP's `bearer` and `durable` access-token flags are accepted as request
+  syntax only so the server can return `invalid_flag`. The AGNAP profile never
+  issues or introspects an agent-facing token as bearer; every such token is
+  bound to the requesting client instance's key. Durable tokens are not issued
+  either. This does not prohibit the vault from privately using a downstream
+  bearer credential.
 - The Open Payments wallet address forms of `client` are removed. `client` is
   the RFC 9635 instance identifier string or an object carrying `key`.
 - Open Payments `limits`, `interval`, `cardAuthorization` and `subject`

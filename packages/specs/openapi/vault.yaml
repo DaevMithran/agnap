@@ -15,6 +15,11 @@ info:
     resolves a credential reference it holds itself, performs the downstream
     call through a connector and records the effect.
 
+    The presented AGNAP token is always bound to the agent instance's key;
+    this profile does not accept an agent-facing bearer token. A connector can
+    use a downstream bearer credential when required, but the credential stays
+    inside the vault and is never returned to the agent.
+
     Operation names and their argument schemas are defined by the connectors a
     deployment registers, so `args` is an open object here. The authority the
     token carries is what closes it.

@@ -13,6 +13,12 @@ info:
     negotiation and [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767) for
     introspection by the vault. It holds no downstream credentials.
 
+    Although GNAP generally permits a client to request a bearer access token,
+    the AGNAP profile requires every agent-facing token to be bound to the
+    requesting client instance's key. A request containing the `bearer` flag
+    is rejected with `invalid_flag`; successful grant and introspection
+    responses never contain that flag.
+
     This document starts from the Open Payments `auth-server.yaml` and records
     every departure in `CHANGELOG.md`. Fields marked **AGNAP extension** are
     not in RFC 9635 or RFC 9767.
@@ -190,9 +196,9 @@ components:
           type: array
           items:
             type: string
-            enum: [bearer]
+            enum: [bearer, durable]
           uniqueItems: true
-          description: The `bearer` flag is refused with `invalid_flag`; every token this server issues is bound to the client key.
+          description: Accepted as request syntax only. Both `bearer` and `durable` are refused with `invalid_flag`; every token this server issues is bound to the client key and none is durable.
       required: [access]
       additionalProperties: false
     Access:
@@ -434,8 +440,9 @@ components:
           type: array
           items:
             type: string
-            enum: [bearer, durable]
+            enum: [durable]
           uniqueItems: true
+          description: This profile never returns `bearer`; agent-facing tokens are key-bound.
       required: [value, access]
       additionalProperties: false
     TokenManagement:
@@ -519,7 +526,8 @@ components:
           type: array
           items:
             type: string
-            enum: [bearer, durable]
+            enum: [durable]
+          description: This profile never introspects an agent-facing token as `bearer`.
         exp:
           type: integer
         iat:

@@ -35,6 +35,12 @@ access token bound to that key. The agent presents the token and a proof over
 its operation request to the **vault**: AGNAP's execution boundary and GNAP
 resource server (RS1).
 
+GNAP generally permits bearer access tokens. The AGNAP profile deliberately
+does not issue them to agents: an agent-facing token is always bound to that
+agent instance's key and is intended for the vault. The vault can still hold
+and use a downstream bearer credential when an existing service requires one,
+but that credential is never returned to the agent.
+
 In the complete design, the vault verifies the token, key proof, operation,
 arguments, time window, and remaining ceilings. Only then does it use the
 credential understood by the downstream service. The agent receives the
@@ -77,8 +83,13 @@ sequenceDiagram
         AS1-->>V: Active token, rights, audience and key
     end
 
-    opt A downstream credential must be obtained or refreshed
-        V->>AS2: Request the credential required by RS2
+    alt Vault already holds a valid downstream credential
+        V->>V: Resolve the stored credential
+    else OAuth token exchange is configured
+        V->>AS2: RFC 8693 exchange for the RS2 audience and scope
+        AS2-->>V: Narrow downstream access token
+    else Another downstream authorization flow is required
+        V->>AS2: Obtain or refresh the required credential
         AS2-->>V: Credential accepted by RS2
     end
 
@@ -90,6 +101,10 @@ sequenceDiagram
 The downstream credential can be an OAuth access token, API key, payment
 mandate, or any artifact the downstream service already understands. AGNAP is
 the authorization layer above that system, not a replacement for it.
+
+See [Downstream credentials](docs/downstream-credentials.md) for the supported
+credential modes, including OAuth token exchange and GNAP downstream-token
+derivation.
 
 ## Security properties
 
@@ -170,7 +185,8 @@ parent, child, Authorization Server, vault, and downstream flow.
 one protocol that fit agent execution:
 
 - Client instances can present their own keys without a registration ceremony.
-- Access tokens can be bound to those keys instead of acting as bearer secrets.
+- Access tokens are key-bound by default; the AGNAP profile requires this mode
+  for every agent-facing token.
 - Structured access objects can describe application-specific rights.
 - Interaction and continuation support authorization that cannot complete in a
   single request.
