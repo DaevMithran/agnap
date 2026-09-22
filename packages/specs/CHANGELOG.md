@@ -32,6 +32,9 @@ Widened:
   introspection responses carry optional `delegation_ref`, `receipt` and
   `credential_refs` fields. These are AGNAP extensions and are marked as such.
   The milestone 1 server rejects `delegation` and never emits the others.
+- A root grant can carry a `delegation_policy` with an explicit `automatic` or
+  `manual` mode. Automatic mode can issue a contained child grant without new
+  owner interaction. Manual mode requires owner interaction for every child.
 
 Narrowed:
 

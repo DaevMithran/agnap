@@ -165,9 +165,14 @@
     },
     "DelegationPolicy": {
       "title": "DelegationPolicy",
-      "description": "Set by the owner on the root grant. Governs every spawn beneath it.",
+      "description": "Set by the owner on the root grant. Governs every spawn beneath it. Automatic mode permits a contained child grant without a new owner interaction. Manual mode requires owner interaction for every child grant.",
       "type": "object",
       "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["automatic", "manual"],
+          "description": "In automatic mode, the authorization server can issue a contained child grant without a new owner interaction. In manual mode, it must obtain owner approval for every child grant. An agent cannot approve its own request."
+        },
         "on_widen": {
           "type": "string",
           "enum": ["reject", "escalate"],
@@ -179,7 +184,7 @@
           "maximum": 32
         }
       },
-      "required": ["on_widen", "max_depth"],
+      "required": ["mode", "on_widen", "max_depth"],
       "additionalProperties": false
     }
   }
