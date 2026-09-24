@@ -14,15 +14,20 @@ Agents commonly inherit credentials and permissions created for an application
 or user account, not for a task, running instance, or subagent. Consider this
 instruction:
 
-> Book one hotel below USD 300 and pay a deposit of at most USD 50. Do not send
-> messages.
+> Find and book one hotel for my 14–16 October conference trip, within five
+> kilometres of the venue. Read only travel-related email, make at most one
+> reservation costing no more than USD 300, and pay at most one USD 50 deposit
+> to the selected hotel's verified merchant. Do not send messages or change any
+> existing booking. All authority expires when the task ends.
 
 The available credentials may still authorize every email in the account,
 unlimited bookings, broader spending, and message delivery. The credential
 answers _what can this account do?_ The task asks _what may this particular
 agent execution cause to happen?_
 
-AGNAP makes that second question explicit:
+One application credential cannot express this task-specific boundary or
+distinguish one running agent's authority from the application's broader
+account access. AGNAP makes the missing question explicit:
 
 > Which agent instance may perform which operation, on which resource, under
 > which constraints, and what may it delegate?
@@ -33,16 +38,6 @@ AGNAP is an internal authorization plane between a user or organization and the
 agent executions acting for it. Downstream services remain unchanged: the vault
 uses the OAuth token, API key, payment mandate, or other credential they already
 accept.
-
-```text
-User or organization
-    -> structured root task grant
-        -> keyed agent execution
-            -> parent requests child permission
-                -> runtime-bound child grant
-                    -> organization-controlled vault
-                        -> existing downstream credential and service
-```
 
 The user or organization sets the root agent's permission and the delegation
 settings. The Authorization Server issues a separate grant bound to the running
@@ -77,43 +72,25 @@ distinguishable from ordinary agent messages.
 
 ```mermaid
 sequenceDiagram
-    actor RO as Resource Owner
-    participant R as Agent Runtime
-    participant C as Agent
-    participant AS1 as GNAP AS
-    participant V as Vault (RS1)
-    participant AS2 as Downstream AS
-    participant RS2 as Downstream RS
+    participant Agent as Your agent
+    participant AGNAP
+    participant Service as External service
 
-    RO->>R: Describe and confirm session permission
-    R->>C: Start agent with its own key
-
-    C->>AS1: Request access to vault operation
-    alt Covered by initial permission
-        AS1-->>C: Key-bound token
-    else Needs owner decision
-        AS1-->>C: Interaction + continuation
-        C-->>RO: Interaction via trusted channel
-        RO->>AS1: Approve or narrow
-        C->>AS1: Continue grant
-        AS1-->>C: Key-bound token
-    end
-
-    C->>V: Operation + token + key proof
-    opt Token introspection
-        V->>AS1: Introspect
-        AS1-->>V: Rights, audience, key
-    end
-    V->>V: Check rights, arguments, remaining usage
-
-    opt No valid downstream credential held
-        V->>AS2: Obtain or refresh credential
-        AS2-->>V: Credential
-    end
-    V->>RS2: Operation + downstream credential
-    RS2-->>V: Result or denial
-    V-->>C: Result
+    Agent->>AGNAP: Request approved operation
+    AGNAP->>AGNAP: Verify agent key and task grant
+    AGNAP->>AGNAP: Check arguments, limits and revocation
+    AGNAP->>Service: Perform authorized API call<br/>with protected credential
+    Service-->>AGNAP: Result or denial
+    AGNAP-->>Agent: Result only
 ```
+
+In this simplified view, **AGNAP** includes the Authorization Server and the
+vault execution boundary. They remain separate protocol roles in the detailed
+architecture.
+
+See the [detailed authorization and execution sequence](docs/operation-flow.md)
+for the resource owner, runtime, Authorization Server, vault, and downstream
+roles.
 
 The effective permission is the intersection of the task grant, vault policy,
 stored downstream credential, and downstream service checks. A broad credential
@@ -121,6 +98,25 @@ cannot widen the task grant. A narrow credential can still prevent an operation
 because AGNAP cannot create authority that the credential does not have. AGNAP
 is the authorization layer above the downstream system, not a replacement for
 it.
+
+## Why GNAP?
+
+[GNAP](https://www.rfc-editor.org/rfc/rfc9635) provides several primitives in
+one protocol that fit agent execution:
+
+- Client instances can present their own keys without a registration ceremony.
+- Access tokens are key-bound by default.
+- Structured access objects can describe application-specific rights.
+- Interaction and continuation support authorization that cannot complete in a
+  single request.
+- HTTP Message Signatures can cover the operation request and its body.
+- [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767) defines how resource
+  servers discover Authorization Servers and validate token state.
+
+The `agent_operation` access type, temporal validity, contained delegation,
+receipts, credential references, and conserved ceilings are AGNAP extensions.
+They are the intended scope of a future Internet-Draft, not features claimed to
+exist in GNAP itself.
 
 ## Security properties
 
@@ -133,47 +129,6 @@ The design targets:
 - Delegation that narrows by default and escalates widening to the owner.
 - Revocation and ceilings shared across a delegation tree.
 
-## Authority model
-
-An authority answers: **which operation may the agent invoke, and which
-arguments may it use?**
-
-The `agent_operation` access type uses an `operations` map. Each entry names one
-callable operation. Inside it, every argument is paired with a constraint. The
-following authority permits payments only to one recipient, in USD, with a
-per-payment limit of 100 USD. It limits the authority and its descendants to
-business hours on 10 September 2026, three calls, and 200 USD in total:
-
-```json
-{
-  "type": "agent_operation",
-  "operations": {
-    "payment.create": {
-      "recipient": { "exact": "merchant:acme" },
-      "amount": { "range": { "min": "0.01", "max": "100.00" } },
-      "currency": { "exact": "USD" }
-    }
-  },
-  "validity": {
-    "not_before": "2026-09-10T09:00:00Z",
-    "not_after": "2026-09-10T17:00:00Z"
-  },
-  "ceilings": {
-    "payment.create": { "calls": 3 },
-    "payment.create.amount": { "total": "200.00", "currency": "USD" }
-  }
-}
-```
-
-This is a closed-world model:
-
-- A 75 USD payment to `merchant:acme` is permitted while budget remains.
-- A payment above 100 USD or to another recipient is denied.
-- A payment before 09:00 UTC or at or after 17:00 UTC is denied.
-- An additional argument is denied because the authority does not name it.
-- A fourth payment, or one taking cumulative spend above 200 USD, is denied.
-- Any operation other than `payment.create` is denied.
-
 ## Delegation narrows authority
 
 When a parent spawns a child, the parent requests the permission that the child
@@ -183,7 +138,30 @@ started this child. The Authorization Server derives the final child grant from
 the request, the parent grant, the owner's delegation mode and maximum depth,
 and the shared task limits. Application code does not construct a second,
 parallel tree of authorization sessions to describe the tree the runtime already
-owns:
+owns.
+
+```mermaid
+sequenceDiagram
+    participant Parent as Parent agent
+    participant AGNAP
+    participant State as Grant state record
+    participant Child as Child agent
+
+    Parent->>Child: Spawn with narrower task
+    Child->>AGNAP: Request child grant<br/>with child key and lineage evidence
+    AGNAP->>AGNAP: Verify runtime lineage and agent keys
+    AGNAP->>AGNAP: Ensure requested authority<br/>is contained by parent's grant
+    AGNAP->>State: Check root grant, lineage<br/>and shared limits
+    State-->>AGNAP: Active root and current usage
+    AGNAP-->>Child: Issue child grant<br/>linked to root state
+    Note over State,Child: Every child draws from the same<br/>root usage record when it acts
+```
+
+The vault owns the grant state record. Child grants reference the same root
+state rather than receiving copied call or spend limits, so concurrent siblings
+cannot multiply the task's authority.
+
+For example, authority can narrow down a spawn tree:
 
 ```text
 Root: read travel email, book ≤ USD 300, deposit ≤ USD 50
@@ -213,24 +191,108 @@ returns to the agent.
 See the [detailed delegation sequence](docs/delegation.md) for the complete
 parent, child, Authorization Server, vault, and downstream flow.
 
-## Why GNAP?
+## Authority model
 
-[GNAP](https://www.rfc-editor.org/rfc/rfc9635) provides several primitives in
-one protocol that fit agent execution:
+An effective authorization decision combines four separate things:
 
-- Client instances can present their own keys without a registration ceremony.
-- Access tokens are key-bound by default.
-- Structured access objects can describe application-specific rights.
-- Interaction and continuation support authorization that cannot complete in a
-  single request.
-- HTTP Message Signatures can cover the operation request and its body.
-- [RFC 9767](https://www.rfc-editor.org/rfc/rfc9767) defines how resource
-  servers discover Authorization Servers and validate token state.
+1. **Instance binding:** which agent key is presenting the request and which
+   AGNAP deployment the token targets.
+2. **Granted authority:** the immutable operations, argument constraints,
+   validity window, and ceiling definitions approved for that instance.
+3. **Grant state:** whether the grant or any ancestor is revoked, plus the
+   shared usage and outstanding reservations for the root grant.
+4. **Execution authority:** vault policy and the downstream credential's own
+   permissions.
 
-The `agent_operation` access type, temporal validity, contained delegation,
-receipts, credential references, and conserved ceilings are AGNAP extensions.
-They are the intended scope of a future Internet-Draft, not features claimed to
-exist in GNAP itself.
+The agent carries the key-bound token containing or referencing the granted
+authority. Mutable grant state remains server-side. It is not copied into the
+token or into each child grant.
+
+### Granted authority
+
+The `agent_operation` access type answers: **which operation may this agent
+invoke, with which arguments, and within which static bounds?** Each operation
+names every argument the caller may supply. Arguments and operations not named
+by the authority are denied.
+
+The following target authority permits payments only to one recipient, in USD,
+with a per-payment limit of 100 USD. It limits the authority and all descendants
+to business hours on 10 September 2026, three calls, and 200 USD in total:
+
+```json
+{
+  "type": "agent_operation",
+  "operations": {
+    "payment.create": {
+      "recipient": { "exact": "merchant:acme" },
+      "amount": { "range": { "min": "0.01", "max": "100.00" } },
+      "currency": { "exact": "USD" }
+    }
+  },
+  "validity": {
+    "not_before": "2026-09-10T09:00:00Z",
+    "not_after": "2026-09-10T17:00:00Z"
+  },
+  "ceilings": {
+    "payment.create": { "calls": 3 },
+    "payment.create.amount": { "total": "200.00", "currency": "USD" }
+  }
+}
+```
+
+### Grant state
+
+Ceilings are definitions in the authority; their changing consumption belongs
+to the root grant's state record. Conceptually, the vault maintains state like
+this—the representation is internal, not an AGNAP wire object:
+
+```json
+{
+  "root_grant_ref": "grant:trip-2026-09-10",
+  "status": "active",
+  "usage": [
+    {
+      "operation": "payment.create",
+      "metric": "calls",
+      "limit": 3,
+      "settled": 1,
+      "reserved": 1
+    },
+    {
+      "operation": "payment.create",
+      "argument": "amount",
+      "metric": "sum",
+      "limit": "200.00",
+      "currency": "USD",
+      "settled": "75.00",
+      "reserved": "50.00"
+    }
+  ]
+}
+```
+
+Before an effectful call, the vault atomically reserves the relevant usage. It
+then settles the reservation on success, releases it on a definitive failure,
+or holds it when the downstream outcome is unknown. Every descendant draws
+from this same record, so concurrent siblings cannot multiply the root budget.
+
+### Decision rules
+
+The model is closed-world and fail-closed:
+
+- A 75 USD payment to `merchant:acme` is permitted while budget remains.
+- A payment above 100 USD or to another recipient is denied.
+- A payment before 09:00 UTC or at or after 17:00 UTC is denied.
+- An additional argument is denied because the authority does not name it.
+- A fourth payment, or one taking cumulative spend above 200 USD, is denied.
+- Any operation other than `payment.create` is denied.
+
+Every constraint kind must define both value evaluation—does this call satisfy
+the constraint?—and containment—does the parent constraint subsume the child
+constraint? Cross-kind containment must be explicit: a wildcard parent may
+contain a range child, which may contain an exact child. An undecidable
+comparison is denied or escalated, never treated as permission. Argument
+requiredness must remain separate from the constraint on an argument's value.
 
 ## Related work
 
