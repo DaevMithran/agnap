@@ -4,6 +4,13 @@ This is an informative view of AGNAP's planned parent-to-child delegation
 flow. The normative wire formats are defined in
 [`schema/delegation.json`](../packages/specs/schema/delegation.json).
 
+A deployment can authorize the root through trusted local policy. It may
+optionally authenticate a user or organization through an existing identity
+system. When external identity is used, AGNAP stores only an opaque, pairwise
+principal reference; the agent does not receive the person's identity
+credential. Every root still belongs to an opaque security domain so credential
+references cannot cross local-owner or tenant boundaries.
+
 The user or organization can require a new decision for every root task or set
 a small initial permission for verified agent instances. Zero permission is
 the recommended default, not a protocol requirement. In both cases, the AS
@@ -12,7 +19,7 @@ distinct GNAP client instance with its own key. The parent requests the
 permission that the child needs. It does not grant that permission. The runtime
 proves the parent and child relationship. The Authorization Server derives the
 final child grant from the request, the parent grant, the owner's delegation
-mode, and the shared task limits. The vault enforces the grant.
+mode, and the shared task limits. The execution service enforces the grant.
 
 When resource-owner interaction is required, the runtime can hand the
 AS-generated interaction to a trusted adapter for delivery through an existing
@@ -28,11 +35,11 @@ sequenceDiagram
     participant P as Parent agent
     participant C as Child agent
     participant AS as GNAP AS
-    participant V as Vault (GNAP RS1)
+    participant E as Execution service (GNAP RS1)
     participant DRS as Downstream Resource Server
 
     APP->>RT: Start the root task
-    P->>AS: Request root authority for vault operations
+    P->>AS: Request root authority for execution-service operations
     alt Request is covered by an initial owner permission
         AS-->>P: Key-bound root token and delegation reference
     else The root task needs a new owner decision
@@ -60,25 +67,19 @@ sequenceDiagram
         AS-->>C: Key-bound child token or denial
     else Automatic mode and request is within grant and limits
         AS-->>C: Key-bound child token and signed receipt
-    else Automatic mode and additional permission can be requested
-        AS-->>C: Interaction details and continuation handle
-        C-->>RO: Deliver AS interaction via trusted user channel
-        RO-->>AS: Approve or narrow
-        C->>AS: Continue child grant request
-        AS-->>C: Key-bound child token and escalated receipt
-    else Step-up is not allowed
+    else Request is not contained by the parent
         AS-->>C: Deny child grant
     end
 
-    C->>V: Operation, child token, arguments, and key proof
-    V->>AS: Introspect child token
-    AS-->>V: Active authority, bound key, lineage, and credential reference
-    V->>V: Check arguments and reserve shared ceiling
-    V->>V: Resolve or obtain the downstream credential
-    V->>DRS: Execute with downstream credential
-    DRS-->>V: Result
-    V->>V: Settle ceiling and record audit event
-    V-->>C: Result only
+    C->>E: Operation, child token, arguments, and key proof
+    E->>AS: Introspect child token
+    AS-->>E: Active authority, bound key, lineage, and credential reference
+    E->>E: Check arguments and reserve shared ceiling
+    E->>E: Resolve or obtain the downstream credential
+    E->>DRS: Execute with downstream credential
+    DRS-->>E: Result
+    E->>E: Settle ceiling and record audit event
+    E-->>C: Result only
 ```
 
 The important invariants are:
@@ -89,10 +90,11 @@ The important invariants are:
 - Automatic mode does not require owner interaction for a child request within
   the parent grant, maximum depth, and shared task limits.
 - Manual mode requires owner interaction for every child grant.
-- Additional permission is rejected unless the owner allows a new approval.
+- A wider child is always rejected. Additional authority requires a separately
+  authorized root lineage; approval never breaks parent-child containment.
 - A child cannot approve its own widening.
 - Descendants share the ancestor's ceilings rather than receiving copies.
-- Revoking an ancestor makes its descendants unusable at the vault.
+- Revoking an ancestor makes its descendants unusable at the execution service.
 - Downstream credentials never enter either agent runtime.
 
 The runtime-evidence message is part of the planned design. The current schema

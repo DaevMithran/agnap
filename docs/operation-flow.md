@@ -1,8 +1,9 @@
 # Authorization and execution sequence
 
 This is the detailed version of the simplified AGNAP flow in the project
-README. It keeps the Authorization Server, vault, downstream authorization
-system, and downstream resource server visible as separate protocol roles.
+README. It keeps the Authorization Server, execution service, downstream
+authorization system, and downstream resource server visible as separate
+protocol roles.
 
 ```mermaid
 sequenceDiagram
@@ -10,14 +11,14 @@ sequenceDiagram
     participant R as Agent Runtime
     participant C as Agent
     participant AS1 as GNAP AS
-    participant V as Vault (RS1)
+    participant E as Execution service (RS1)
     participant AS2 as Downstream AS
     participant RS2 as Downstream RS
 
     RO->>R: Describe and confirm session permission
     R->>C: Start agent with its own key
 
-    C->>AS1: Request access to vault operation
+    C->>AS1: Request access to execution-service operation
     alt Covered by initial permission
         AS1-->>C: Key-bound token
     else Needs owner decision
@@ -28,18 +29,18 @@ sequenceDiagram
         AS1-->>C: Key-bound token
     end
 
-    C->>V: Operation + token + key proof
+    C->>E: Operation + token + key proof
     opt Token introspection
-        V->>AS1: Introspect
-        AS1-->>V: Rights, audience, key
+        E->>AS1: Introspect
+        AS1-->>E: Rights, audience, key
     end
-    V->>V: Check rights, arguments, remaining usage
+    E->>E: Check rights, arguments, remaining usage
 
     opt No valid downstream credential held
-        V->>AS2: Obtain or refresh credential
-        AS2-->>V: Credential
+        E->>AS2: Obtain or refresh credential
+        AS2-->>E: Credential
     end
-    V->>RS2: Operation + downstream credential
-    RS2-->>V: Result or denial
-    V-->>C: Result only
+    E->>RS2: Operation + downstream credential
+    RS2-->>E: Result or denial
+    E-->>C: Result only
 ```
