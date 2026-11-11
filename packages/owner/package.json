@@ -1,0 +1,32 @@
+{
+  "name": "@agnap/owner",
+  "version": "0.1.0",
+  "description": "agnap-owner: the resource owner's CLI. Lists pending GNAP grants and approves, narrows or denies them with requests signed by the owner key.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "agnap-owner": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@agnap/access-types": "workspace:*",
+    "@agnap/gnap-core": "workspace:*",
+    "@agnap/gnap-server": "workspace:*"
+  }
+}

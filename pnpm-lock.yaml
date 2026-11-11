@@ -80,6 +80,18 @@ importers:
         specifier: ^2.9.0
         version: 2.9.0
 
+  packages/owner:
+    dependencies:
+      '@agnap/access-types':
+        specifier: workspace:*
+        version: link:../access-types
+      '@agnap/gnap-core':
+        specifier: workspace:*
+        version: link:../gnap-core
+      '@agnap/gnap-server':
+        specifier: workspace:*
+        version: link:../gnap-server
+
   packages/specs:
     devDependencies:
       '@redocly/cli':

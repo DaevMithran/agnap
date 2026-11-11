@@ -19,7 +19,8 @@
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "lint:specs": "pnpm --filter @agnap/specs run lint",
-    "gnap-server": "tsx --conditions=development packages/gnap-server/src/cli.ts"
+    "gnap-server": "tsx --conditions=development packages/gnap-server/src/cli.ts",
+    "agnap-owner": "tsx --conditions=development packages/owner/src/cli.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
