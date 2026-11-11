@@ -36,6 +36,9 @@ export class MemorySessionGrantStore implements SessionGrantStore {
   clear(sessionId: string): void {
     this.#grants.delete(sessionId);
   }
+  sessionIds(): readonly string[] {
+    return [...this.#grants.keys()];
+  }
 }
 
 export interface GnapToolAuthorizerOptions {
@@ -152,6 +155,21 @@ export class GnapToolAuthorizer {
     return this.revoke(sessionId, signal);
   }
 
+  /**
+   * Revoke the grants of every session, for plugin unload. Every session is
+   * attempted even when some fail; the failures are thrown together.
+   */
+  async revokeAll(signal?: AbortSignal): Promise<void> {
+    const results = await Promise.allSettled(
+      this.#grants.sessionIds().map((sessionId) => this.revoke(sessionId, signal)),
+    );
+    const failures = results.flatMap((result): unknown[] =>
+      result.status === 'rejected' ? [result.reason] : [],
+    );
+    if (failures.length > 0)
+      throw new AggregateError(failures, 'one or more sessions failed to revoke');
+  }
+
   async #authorize(
     input: AuthorizeToolInput,
     approval: ApprovalPort,
@@ -196,7 +214,8 @@ export class GnapToolAuthorizer {
     const grantId = grantIdFrom(pending.continue.uri);
     let issuedSuccessfully = false;
     try {
-      const reason = `Request scope ${describeScope(call.access, call.operation)}; current call ${JSON.stringify(call.arguments)}; token expires in up to ${this.#tokenTtlSeconds} seconds`;
+      // The Harness only offers "allow once"; say plainly that approval covers later calls in scope.
+      const reason = `Approving lets this agent use ${describeScope(call.access, call.operation)} for up to ${this.#tokenTtlSeconds} seconds, not only this call. Current call: ${JSON.stringify(call.arguments)}`;
       const outcome = await approval.request({
         sessionId: input.sessionId,
         agent: input.agent,
@@ -212,7 +231,9 @@ export class GnapToolAuthorizer {
 
       await this.#owner.resolve(grantId, 'approve', input.signal);
       let continuation = pending.continue;
-      let waitSeconds = continuation.wait ?? 0;
+      // The owner has decided, so the first continuation does not wait out the
+      // polling interval; a server that still paces it answers too_fast below.
+      let waitSeconds = 0;
       let token: AccessToken | undefined;
       for (let attempt = 0; attempt < this.#maxContinuationAttempts; attempt += 1) {
         const waitMilliseconds = waitSeconds * 1000;

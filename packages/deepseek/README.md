@@ -77,6 +77,17 @@ and revokes the agent's live grants. Low-level hosts that omit
 `disposedSessionId` should call `authorizer.disposeSession(id)` themselves;
 otherwise token TTL is their cleanup bound.
 
+On Harness shutdown the plugin is torn down before its agents, so
+`agent/disposed` never reaches it. The plugin therefore also revokes every
+session's grants when it unloads, waiting at most `unloadRevokeTimeoutMs`
+(default 3000). A grant the server cannot be reached to revoke stays live until
+its TTL.
+
+The Harness approval prompt offers only "allow once", but an approved grant
+covers every later call within its scope until it expires. The prompt text says
+so. After the owner decides, the plugin continues the grant immediately rather
+than waiting out the server's polling interval.
+
 ## Run the local PoC with DeepSeek Harness
 
 This walkthrough uses the Harness browser approval channel and the
@@ -130,6 +141,7 @@ with the AGNAP checkout's absolute path:
         simulateOwnerSecretEnv: GNAP_OWNER_SECRET
         tokenTtlSeconds: 600
         denyUnprofiledTools: false
+        unloadRevokeTimeoutMs: 3000
         profiles:
           - toolName: bash
             operation: shell.exec
@@ -181,6 +193,10 @@ GNAP operation, constrained arguments, concrete call, and token lifetime.
   grant and prompt.
 - Reject a request: the tool call is denied and no token is stored.
 - Dispose the agent: the plugin attempts to revoke every live session grant.
+- Stop the Harness: the plugin revokes the grants of every session.
+
+`harness-e2e/` automates these checks against the pinned Harness; see its
+README.
 
 Harness approval is the interaction channel in this mode. AGNAP does not need
 separate Slack or email configuration; any Harness answerer for

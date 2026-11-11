@@ -173,4 +173,62 @@ describe('DeepSeek Harness adapter', () => {
     expect(revocations).toBe(1);
     expect(grants.list('agent-1')).toEqual([]);
   });
+
+  it('revokes every session at plugin unload, bounded by the unload timeout', async () => {
+    const token = (n: number) => ({
+      value: `access-${n}`,
+      access: [],
+      expires_in: 600,
+      manage: { uri: `https://as.test/token/${n}`, access_token: { value: `management-${n}` } },
+    });
+    const setup = (revoke: GrantClient['revoke']) => {
+      const grants = new MemorySessionGrantStore();
+      grants.add('agent-1', { fingerprint: 'f1', token: token(1) });
+      grants.add('agent-2', { fingerprint: 'f2', token: token(2) });
+      const authorizer = new GnapToolAuthorizer({
+        profiles: [{ toolName: 'protected', arguments: { repository: {} } }],
+        clients: { get: () => ({ ...unusedClient, revoke }) },
+        owner: { resolve: () => Promise.reject(new Error('not expected')) },
+        grants,
+      });
+      let unload: (() => Promise<void>) | undefined;
+      const errors: string[] = [];
+      const context: HarnessContext = {
+        on: () => undefined,
+        get: () => ({ request: () => Promise.resolve('allowed-once') }),
+        effect: (execute) => {
+          unload = execute();
+        },
+        logger: { error: (message) => errors.push(message) },
+      };
+      return { grants, authorizer, context, unload: () => unload!(), errors };
+    };
+
+    let revocations = 0;
+    const ok = setup(() => {
+      revocations += 1;
+      return Promise.resolve();
+    });
+    applyDeepSeekHarnessPlugin(ok.context, { authorizer: ok.authorizer, sessionId: () => 'x' });
+    await ok.unload();
+    expect(revocations).toBe(2);
+    expect(ok.grants.sessionIds()).toEqual([]);
+
+    const hung = setup(() => new Promise(() => undefined));
+    applyDeepSeekHarnessPlugin(hung.context, {
+      authorizer: hung.authorizer,
+      sessionId: () => 'x',
+      unloadRevokeTimeoutMs: 20,
+    });
+    await hung.unload();
+    expect(hung.errors).toEqual(['GNAP revocation at plugin unload failed']);
+
+    expect(() =>
+      applyDeepSeekHarnessPlugin(ok.context, {
+        authorizer: ok.authorizer,
+        sessionId: () => 'x',
+        unloadRevokeTimeoutMs: 0,
+      }),
+    ).toThrow(RangeError);
+  });
 });

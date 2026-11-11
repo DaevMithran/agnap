@@ -42,6 +42,8 @@ function fixture(
     tokenTtlSeconds?: number;
     continueWaitSeconds?: number;
     sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+    /** When false, the owner port records the decision but the grant stays pending at the server. */
+    ownerReachesServer?: boolean;
   } = {},
 ) {
   const rs = Ed25519Signer.generate('harness-plugin-rs');
@@ -89,6 +91,7 @@ function fixture(
   const owner: OwnerDecisionPort = {
     resolve: (grantId, decision, signal) => {
       ownerDecisions.push({ grantId, decision });
+      if (options.ownerReachesServer === false) return Promise.resolve();
       return localOwner.resolve(grantId, decision, signal);
     },
   };
@@ -148,6 +151,7 @@ describe('GNAP tool authorizer', () => {
     expect(reasons[0]).toContain('acme/app');
     expect(reasons[0]).toContain('title = any');
     expect(reasons[0]).toContain('600 seconds');
+    expect(reasons[0]).toContain('not only this call');
     expect(grants.list('session-1')[0]?.token.value).toBeTruthy();
     expect(grants.list('session-1')[0]?.fingerprint).not.toBe(
       grants.list('session-1')[0]?.token.value,
@@ -325,6 +329,32 @@ describe('GNAP tool authorizer', () => {
     expect(expired.ownerDecisions.filter((item) => item.decision === 'approve')).toHaveLength(2);
   });
 
+  it('continues at once after the owner approves, without waiting out the polling interval', async () => {
+    const sleeps: number[] = [];
+    const { authorizer } = fixture({
+      continueWaitSeconds: 5,
+      sleep: (milliseconds) => {
+        sleeps.push(milliseconds);
+        return Promise.resolve();
+      },
+    });
+    const decision = await authorizer.authorize(input(), {
+      request: () => Promise.resolve('allowed-once'),
+    });
+    expect(decision.kind).toBe('allow');
+    expect(sleeps).toEqual([]);
+  });
+
+  it('revokeAll revokes the grants of every session', async () => {
+    const approval: ApprovalPort = { request: () => Promise.resolve('allowed-once') };
+    const { authorizer, grants } = fixture();
+    await authorizer.authorize(input({ sessionId: 'session-1' }), approval);
+    await authorizer.authorize(input({ sessionId: 'session-2', callId: 'call-2' }), approval);
+    expect(grants.sessionIds()).toEqual(['session-1', 'session-2']);
+    await authorizer.revokeAll();
+    expect(grants.sessionIds()).toEqual([]);
+  });
+
   it('preserves cancellation and best-effort denies abandoned grants', async () => {
     const cancelled = fixture();
     expect(
@@ -335,8 +365,10 @@ describe('GNAP tool authorizer', () => {
     expect(cancelled.ownerDecisions.map((item) => item.decision)).toEqual(['deny']);
 
     const controller = new AbortController();
+    // The owner's decision has not reached the server yet, so continuation stays pending and waits.
     const duringWait = fixture({
       continueWaitSeconds: 1,
+      ownerReachesServer: false,
       sleep: () => {
         controller.abort();
         return Promise.reject(new Error('aborted during wait'));

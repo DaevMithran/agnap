@@ -32,6 +32,8 @@ export interface SessionGrantStore {
   add(sessionId: string, grant: StoredGrant): void;
   delete(sessionId: string, fingerprint: string): void;
   clear(sessionId: string): void;
+  /** Sessions that currently hold at least one grant. */
+  sessionIds(): readonly string[];
 }
 
 export interface GrantClient {

@@ -41,8 +41,13 @@ export interface HarnessContext {
   ): unknown;
   on(event: 'agent/disposed', listener: (payload: { agent: unknown }) => void): unknown;
   get(name: 'approval'): HarnessApprovalService | undefined;
+  /** Cordis effect; the returned disposer runs, and is awaited, when the plugin unloads. */
+  effect?(execute: () => () => Promise<void>, label?: string): unknown;
   logger?: { error(message: string, error?: unknown): void };
 }
+
+/** Default bound on revoking every grant when the plugin unloads. */
+export const DEFAULT_UNLOAD_REVOKE_TIMEOUT_MS = 3000;
 
 export interface DeepSeekHarnessPluginOptions {
   authorizer: GnapToolAuthorizer;
@@ -51,6 +56,12 @@ export interface DeepSeekHarnessPluginOptions {
   denyUnprofiledTools?: boolean;
   /** Enables revocation when the pinned Harness emits `agent/disposed`. */
   disposedSessionId?(agent: unknown): string | null;
+  /**
+   * How long plugin unload waits for every grant to be revoked. The Harness
+   * tears this plugin down before its agents on shutdown, so `agent/disposed`
+   * alone would leave tokens live until they expire. Defaults to 3000.
+   */
+  unloadRevokeTimeoutMs?: number;
 }
 
 /** Serializable development configuration accepted by the Cordis `apply` export. */
@@ -66,6 +77,8 @@ export interface Config {
   tokenTtlSeconds?: number;
   /** Deny tools without a profile. Defaults to the Harness-compatible permissive mode. */
   denyUnprofiledTools?: boolean;
+  /** Bound on revoking every grant at plugin unload, in milliseconds. Defaults to 3000. */
+  unloadRevokeTimeoutMs?: number;
 }
 
 export const name = '@agnap/deepseek';
@@ -129,6 +142,9 @@ export function apply(context: HarnessContext, config: Config): void {
       ? { denyUnprofiledTools: config.denyUnprofiledTools }
       : {}),
     disposedSessionId: sessionIdFromAgent,
+    ...(config.unloadRevokeTimeoutMs !== undefined
+      ? { unloadRevokeTimeoutMs: config.unloadRevokeTimeoutMs }
+      : {}),
   });
 }
 
@@ -140,15 +156,34 @@ export function applyDeepSeekHarnessPlugin(
   context: HarnessContext,
   options: DeepSeekHarnessPluginOptions,
 ): void {
+  const logError = (message: string, error: unknown) => {
+    if (context.logger !== undefined) context.logger.error(message, error);
+    else console.error(message, error);
+  };
+  const unloadTimeout = options.unloadRevokeTimeoutMs ?? DEFAULT_UNLOAD_REVOKE_TIMEOUT_MS;
+  if (!Number.isInteger(unloadTimeout) || unloadTimeout <= 0) {
+    throw new RangeError('unloadRevokeTimeoutMs must be a positive integer');
+  }
+  context.effect?.(
+    () => () => {
+      // Bounds the whole step: revocation queues behind any authorization still in flight.
+      const signal = AbortSignal.timeout(unloadTimeout);
+      const timedOut = new Promise<never>((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason as Error), { once: true });
+      });
+      return Promise.race([options.authorizer.revokeAll(signal), timedOut]).catch(
+        (error: unknown) => logError('GNAP revocation at plugin unload failed', error),
+      );
+    },
+    'agnap: revoke grants on unload',
+  );
   if (options.disposedSessionId !== undefined) {
     context.on('agent/disposed', ({ agent }) => {
       const sessionId = options.disposedSessionId?.(agent);
       if (sessionId === null || sessionId === undefined) return;
-      void options.authorizer.disposeSession(sessionId).catch((error: unknown) => {
-        if (context.logger !== undefined)
-          context.logger.error('GNAP session revocation failed', error);
-        else console.error('GNAP session revocation failed', error);
-      });
+      void options.authorizer
+        .disposeSession(sessionId)
+        .catch((error: unknown) => logError('GNAP session revocation failed', error));
     });
   }
   context.on('tools/pre-execute', async (execution, next) => {
