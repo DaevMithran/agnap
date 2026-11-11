@@ -75,6 +75,23 @@ describe('MemoryStore.advanceContinuation', () => {
     });
   });
 
+  it('a decided grant is answered before its polling time', async () => {
+    const approved = new MemoryStore();
+    await approved.createGrant(grant());
+    await approved.resolvePendingGrant('g1', { kind: 'approve', access, audiences: [] });
+    expect(await approved.advanceContinuation('g1', adv({ now: 1500 }))).toMatchObject({
+      kind: 'issued',
+    });
+
+    const denied = new MemoryStore();
+    await denied.createGrant(grant());
+    await denied.resolvePendingGrant('g1', { kind: 'deny', code: 'user_denied' });
+    expect(await denied.advanceContinuation('g1', adv({ now: 1500 }))).toEqual({
+      kind: 'denied',
+      code: 'user_denied',
+    });
+  });
+
   it('expires pending and approved grants before resolution or continuation', async () => {
     const clock = fixedClock(9_999);
     const s = new MemoryStore({ clock });

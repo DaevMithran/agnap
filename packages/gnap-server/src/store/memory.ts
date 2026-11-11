@@ -117,6 +117,7 @@ export class MemoryStore implements Store {
     this.#sweepExpiredState();
     const g = this.#grants.get(id);
     if (g === undefined || g.state !== 'pending') return false;
+    g.notBefore = 0;
     if (r.kind === 'approve') {
       g.state = 'approved';
       g.decidedAccess = r.access;

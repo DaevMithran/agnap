@@ -52,6 +52,11 @@ provide their own decision implementation without changing the GNAP protocol.
 After issuance, resource servers check the issued access rather than rerunning
 the server's standing policy.
 
+A pending grant tells the client how long to wait before continuing
+(`continueWaitSeconds`, default 5; `gnap-server serve --continue-wait`), and an
+earlier continuation gets `too_fast`. Once the owner approves or denies, the
+next continuation is answered at once.
+
 Pending and approved grants expire if continuation is not completed. Issued
 tokens have their own expiry and management handle. The in-memory store removes
 expired state lazily, binds continuation and revocation to the client key, and

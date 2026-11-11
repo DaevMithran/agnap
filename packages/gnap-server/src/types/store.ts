@@ -51,7 +51,11 @@ export interface Store {
    */
   advanceContinuation(id: string, advance: ContinuationAdvance): Promise<ContinuationOutcome>;
 
-  /** Pending to approved or denied. Succeeds once. */
+  /**
+   * Pending to approved or denied. Succeeds once. Clears `notBefore`: the
+   * client's next continuation is answered at once, because the polling
+   * interval only paces requests while nothing has been decided.
+   */
   resolvePendingGrant(id: string, resolution: Resolution): Promise<boolean>;
 
   /** Read-only, for signature verification of a token management request. */

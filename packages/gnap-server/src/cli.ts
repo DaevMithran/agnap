@@ -13,6 +13,7 @@ import type { ResourceServerEntry } from './types/registry.js';
 
 /**
  * GNAP_OWNER_SECRET=... gnap-server serve --port 4000 --issuer http://127.0.0.1:4000/ --rs-registry rs.json
+ *                    [--continue-wait <seconds>]   polling interval for pending grants (default 5)
  * gnap-server owner  list | approve <grant-id> [--access-file f.json] [--audiences rs1,rs2] | deny <grant-id>
  *                    --url http://127.0.0.1:4000 --secret S
  *
@@ -44,6 +45,7 @@ async function serveCommand(args: string[]): Promise<void> {
       port: { type: 'string' },
       issuer: { type: 'string' },
       'rs-registry': { type: 'string' },
+      'continue-wait': { type: 'string' },
     },
     strict: true,
   });
@@ -52,8 +54,15 @@ async function serveCommand(args: string[]): Promise<void> {
   const secret = process.env.GNAP_OWNER_SECRET;
   const store = new MemoryStore();
   const rsRegistry = loadRegistry(values['rs-registry']);
+  const continueWait = values['continue-wait'];
   const server = createServer(
-    { issuer, registry: rsRegistry, accessTypes: [agentOperationHandler], decision: pendingOwner },
+    {
+      issuer,
+      registry: rsRegistry,
+      accessTypes: [agentOperationHandler],
+      decision: pendingOwner,
+      ...(continueWait !== undefined ? { continueWaitSeconds: Number(continueWait) } : {}),
+    },
     store,
   );
   const handler = createHandler({
