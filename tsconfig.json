@@ -13,7 +13,8 @@
       "@agnap/access-types/*": ["packages/access-types/src/*.ts"],
       "@agnap/gnap-server": ["packages/gnap-server/src/index.ts"],
       "@agnap/deepseek": ["packages/deepseek/src/index.ts"],
-      "@agnap/owner": ["packages/owner/src/index.ts"]
+      "@agnap/owner": ["packages/owner/src/index.ts"],
+      "@agnap/executor": ["packages/executor/src/index.ts"]
     }
   },
   "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "vitest.config.ts"]

@@ -15,6 +15,7 @@ export default defineConfig({
       { find: /^@agnap\/access-types\/(.*)$/, replacement: src('access-types', '$1.ts') },
       { find: /^@agnap\/gnap-server$/, replacement: src('gnap-server') },
       { find: /^@agnap\/owner$/, replacement: src('owner') },
+      { find: /^@agnap\/executor$/, replacement: src('executor') },
       {
         find: /^@agnap\/deepseek$/,
         replacement: src('deepseek'),

@@ -1,0 +1,26 @@
+{
+  "port": 4100,
+  "host": "127.0.0.1",
+  "issuer": "http://127.0.0.1:4000/",
+  "resourceServer": { "id": "agnapd", "privateJwkFile": "agnapd-rs.jwk" },
+  "grantState": { "sqlite": "grant-state.db" },
+  "connectors": [
+    {
+      "type": "http",
+      "baseUrl": "http://127.0.0.1:4200",
+      "credential": { "header": "authorization", "prefix": "Bearer ", "env": "CANARY_TOKEN" },
+      "operations": {
+        "github.issues.list": {
+          "method": "GET",
+          "path": "/repos/{+repository}/issues",
+          "query": ["state"]
+        },
+        "github.comment.create": {
+          "method": "POST",
+          "path": "/repos/{+repository}/issues/{issue}/comments",
+          "body": ["body"]
+        }
+      }
+    }
+  ]
+}

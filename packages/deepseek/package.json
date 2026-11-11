@@ -1,7 +1,7 @@
 {
   "name": "@agnap/deepseek",
   "version": "0.1.0",
-  "description": "DeepSeek Harness pre-execute authorization plugin backed by key-bound GNAP grants.",
+  "description": "DeepSeek Harness plugin: key-bound GNAP grants for tool calls, performed through the AGNAP executor.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -27,6 +27,7 @@
     "@agnap/gnap-core": "workspace:*"
   },
   "devDependencies": {
+    "@agnap/executor": "workspace:*",
     "@agnap/gnap-server": "workspace:*"
   }
 }

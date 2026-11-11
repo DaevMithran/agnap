@@ -1,0 +1,36 @@
+{
+  "name": "@agnap/executor",
+  "version": "0.1.0",
+  "description": "agnapd: the AGNAP executor. Holds downstream credentials, checks each signed operation against its GNAP grant, enforces grant ceilings on one grant state record per root grant, then calls the downstream service through a pluggable connector.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "agnapd": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@agnap/access-types": "workspace:*",
+    "@agnap/gnap-core": "workspace:*",
+    "@agnap/gnap-server": "workspace:*"
+  }
+}

@@ -48,6 +48,21 @@ importers:
         specifier: workspace:*
         version: link:../gnap-core
     devDependencies:
+      '@agnap/executor':
+        specifier: workspace:*
+        version: link:../executor
+      '@agnap/gnap-server':
+        specifier: workspace:*
+        version: link:../gnap-server
+
+  packages/executor:
+    dependencies:
+      '@agnap/access-types':
+        specifier: workspace:*
+        version: link:../access-types
+      '@agnap/gnap-core':
+        specifier: workspace:*
+        version: link:../gnap-core
       '@agnap/gnap-server':
         specifier: workspace:*
         version: link:../gnap-server
