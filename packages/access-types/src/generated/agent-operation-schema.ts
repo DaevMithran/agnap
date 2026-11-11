@@ -1,0 +1,66 @@
+/** Generated from @agnap/specs. Do not edit. */
+export const agentOperationSchema = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  $id: 'urn:agnap:schema:agent-operation:0.2.0',
+  title: 'AgentOperationAccess',
+  description: 'The shipped agent_operation GNAP access object.',
+  type: 'object',
+  properties: {
+    type: {
+      const: 'agent_operation',
+    },
+    operations: {
+      type: 'object',
+      minProperties: 1,
+      propertyNames: {
+        pattern: '^[A-Za-z0-9_.:/-]{1,200}$',
+      },
+      additionalProperties: {
+        type: 'object',
+        propertyNames: {
+          pattern: '^[A-Za-z0-9_.-]{1,100}$',
+        },
+        additionalProperties: {
+          $ref: '#/$defs/Constraint',
+        },
+      },
+    },
+  },
+  required: ['type', 'operations'],
+  additionalProperties: false,
+  $defs: {
+    Scalar: {
+      type: ['string', 'number', 'boolean'],
+    },
+    ExactConstraint: {
+      type: 'object',
+      properties: {
+        exact: {
+          $ref: '#/$defs/Scalar',
+        },
+      },
+      required: ['exact'],
+      additionalProperties: false,
+    },
+    WildcardConstraint: {
+      type: 'object',
+      properties: {
+        wildcard: {
+          const: true,
+        },
+      },
+      required: ['wildcard'],
+      additionalProperties: false,
+    },
+    Constraint: {
+      oneOf: [
+        {
+          $ref: '#/$defs/ExactConstraint',
+        },
+        {
+          $ref: '#/$defs/WildcardConstraint',
+        },
+      ],
+    },
+  },
+};
