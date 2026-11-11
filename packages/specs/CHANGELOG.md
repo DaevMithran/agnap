@@ -2,6 +2,35 @@
 
 All specification files share the version in `VERSION`.
 
+## 0.2.0
+
+`as.yaml` is replaced by the contract of the generic GNAP authorization
+server profile implemented in `packages/gnap-server`. It is the single
+editable copy; the server package carries no spec of its own and a test in
+`gnap-server` checks that the routes it registers are exactly the paths and
+methods declared here.
+
+- Paths: `POST /`, `POST /continue/{id}`, `DELETE /token/{id}`,
+  `POST /introspect`. Continuation and token management are new. Asynchronous
+  authorization only: responses carry `continue` with `wait`, never `interact`.
+- Token revocation presents the token management access token, distinct from
+  the access token.
+- Introspection follows RFC 9767 section 3.3 with a resource server registry,
+  per-token audiences, `iss` required when active, and the `invalid_resource_server`
+  and `invalid_access` error codes.
+- Access items are `{ type, ... }` objects handled by a registered type;
+  reference strings are refused. The AGNAP extension fields (`delegation`,
+  `runtime_evidence`, `delegation_ref`, `root_ref`, `runtime_ref`, `receipt`)
+  are gone from this contract.
+- `local-owner.yaml` documents the non-RFC owner extension under `/local/grants`.
+- OpenAPI component schemas are the source for generated TypeScript wire types
+  and Ajv runtime validators. Zod is no longer a second schema definition.
+- `schema/agent-operation.json` is the shipped exact/wildcard access vocabulary;
+  `authority.json` remains the separate forward-looking policy model.
+- The retired `vault.yaml` surface is no longer exported. The `schema/` files
+  remain forward-looking design artifacts and are not implemented completely by
+  the current packages.
+
 ## 0.1.0
 
 First cut, milestone 1 surface only. `as.yaml` starts from Open Payments
@@ -28,13 +57,25 @@ Widened:
   the authorization server.
 - `manage` in an access token response is the RFC 9635 object
   (`{"uri": ..., "access_token": {"value": ...}}`), not the pre-RFC string.
-- Grant request carries an optional `delegation` field and grant and
-  introspection responses carry optional `delegation_ref`, `receipt` and
-  `credential_refs` fields. These are AGNAP extensions and are marked as such.
-  The milestone 1 server rejects `delegation` and never emits the others.
-- A root grant can carry a `delegation_policy` with an explicit `automatic` or
-  `manual` mode. Automatic mode can issue a contained child grant without new
-  owner interaction. Manual mode requires owner interaction for every child.
+- Grant request carries optional `delegation` and `runtime_evidence` fields.
+  The milestone 1 server explicitly rejects both rather than claiming a
+  lineage or runtime binding it did not verify.
+- Grant and introspection responses carry stable `delegation_ref` and
+  `root_ref` values. Runtime-bound implementations also return `runtime_ref`.
+- `context.json` defines the server-side root authorization context, signed
+  runtime evidence and credential ownership binding. External identity is an
+  optional root-authorization input; local deployment policy can authorize a
+  root without it. Every root and credential remains bound to an opaque
+  security domain, and raw identity claims are not exposed to agents or vaults.
+- A root authorization context carries an effective `delegation_policy` with
+  an explicit `automatic` or `manual` mode. The owner or trusted organization
+  policy sets it; an agent cannot set it authoritatively.
+- Delegation is strictly attenuating. A child wider than its parent is always
+  rejected. Newly approved additional authority starts a separate root
+  lineage rather than appearing as a wider child.
+- Introspection defines fail-closed active-state semantics for expiry, node or
+  ancestor revocation, root revocation, stopped runtimes and withdrawn
+  credential bindings.
 
 Narrowed:
 

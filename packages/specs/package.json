@@ -1,7 +1,7 @@
 {
   "name": "@agnap/specs",
-  "version": "0.1.0",
-  "description": "OpenAPI and JSON Schema specifications for the AGNAP authorization server and vault",
+  "version": "0.2.0",
+  "description": "OpenAPI specifications for the GNAP authorization server profile (RFC 9635, RFC 9767) and its local owner extension.",
   "license": "Apache-2.0",
   "type": "module",
   "files": [
@@ -13,16 +13,23 @@
   ],
   "exports": {
     "./openapi/as.yaml": "./openapi/as.yaml",
-    "./openapi/vault.yaml": "./openapi/vault.yaml",
+    "./openapi/local-owner.yaml": "./openapi/local-owner.yaml",
     "./schema/authority.json": "./schema/authority.json",
+    "./schema/agent-operation.json": "./schema/agent-operation.json",
+    "./schema/context.json": "./schema/context.json",
     "./schema/delegation.json": "./schema/delegation.json",
     "./VERSION": "./VERSION"
   },
   "scripts": {
-    "lint": "redocly lint openapi/as.yaml openapi/vault.yaml --format=stylish",
+    "generate": "node scripts/generate.mjs",
+    "generate:check": "node scripts/generate.mjs --check",
+    "lint": "pnpm run generate:check && redocly lint openapi/as.yaml openapi/local-owner.yaml --format=stylish",
     "build": "echo '@agnap/specs has nothing to build'"
   },
   "devDependencies": {
-    "@redocly/cli": "^2.51.2"
+    "@redocly/cli": "^2.51.2",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.9.6",
+    "yaml": "^2.9.0"
   }
 }

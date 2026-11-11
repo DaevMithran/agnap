@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agnap.dev/schema/delegation.json",
+  "$id": "urn:agnap:schema:delegation:0.2.0",
   "title": "Delegation",
-  "description": "AGNAP extension to GNAP. A parent agent spawns a child by signing a delegation assertion with the key its own access token is bound to. The child presents the assertion in a normal grant request. The authorization server verifies it, checks that the child's authority is contained in the parent's, and returns a signed receipt. Types only in milestone 1; nothing here is processed yet. The root of this schema is the union of the four artefacts so that generators emit every definition; wire messages reference the definitions directly.",
+  "description": "AGNAP extension to GNAP. A parent agent requests authority for a child by signing a delegation assertion with the key its own access token is bound to. Separate runtime evidence proves that the parent runtime started the child runtime and binds the child key. The child presents both in a normal grant request. The authorization server verifies them, requires the child's authority to be contained in the parent's, and returns a signed receipt. Types only in milestone 1; nothing here is processed yet. The root of this schema is the union of the four artefacts so that generators emit every definition; wire messages reference the definitions directly.",
   "oneOf": [
     {
       "$ref": "#/$defs/DelegationEnvelope"
@@ -48,7 +48,7 @@
     },
     "DelegationAssertionClaims": {
       "title": "DelegationAssertionClaims",
-      "description": "Payload of the assertion a parent signs to spawn a child. Verified by the authorization server in the order: aud, iat and exp; jti unused; parent_ref resolves to an active, non-revoked token whose bound key produced the signature and whose value hash matches parent_token_hash when present; child_key_thumbprint equals the requesting key; depth below the policy maximum; child expiry within the parent's; requested access and ceilings contained in the parent's.",
+      "description": "Payload of the assertion a parent signs to request authority for a child. The assertion does not prove a spawn event; matching trusted runtime evidence does. Verified by the authorization server in the order: aud, iat and exp; jti is checked for prior use and recorded atomically; parent_ref resolves to an active token whose bound key produced the signature and whose value hash matches parent_token_hash when present; child_key_thumbprint equals both the requesting key and runtime evidence; the runtime evidence names the runtime bound to the parent; depth is below the policy maximum; child expiry is within the parent's; requested access and ceilings are contained in the parent's. A wider child is always denied and must begin a separately authorized root lineage.",
       "type": "object",
       "properties": {
         "parent_ref": {
@@ -65,12 +65,12 @@
         "access": {
           "type": "array",
           "items": {
-            "$ref": "authority.json#/$defs/AgentOperationAccess"
+            "$ref": "urn:agnap:schema:authority:0.2.0#/$defs/AgentOperationAccess"
           },
           "minItems": 1
         },
         "ceilings": {
-          "$ref": "authority.json#/$defs/Ceilings"
+          "$ref": "urn:agnap:schema:authority:0.2.0#/$defs/Ceilings"
         },
         "aud": {
           "type": "string",
@@ -126,23 +126,22 @@
         "access": {
           "type": "array",
           "items": {
-            "$ref": "authority.json#/$defs/AgentOperationAccess"
+            "$ref": "urn:agnap:schema:authority:0.2.0#/$defs/AgentOperationAccess"
           },
           "minItems": 1
         },
         "ceilings": {
-          "$ref": "authority.json#/$defs/Ceilings"
+          "$ref": "urn:agnap:schema:authority:0.2.0#/$defs/Ceilings"
         },
         "depth": {
           "type": "integer",
           "minimum": 1
         },
-        "root_grant": {
-          "type": "string"
+        "root_ref": {
+          "$ref": "urn:agnap:schema:context:0.2.0#/$defs/RootRef"
         },
-        "escalated": {
-          "type": "boolean",
-          "description": "True when the child's authority was not contained in the parent's and the owner approved the widening through GNAP interaction, per `delegation_policy.on_widen`."
+        "runtime_ref": {
+          "$ref": "urn:agnap:schema:context:0.2.0#/$defs/RuntimeRef"
         },
         "iat": {
           "type": "integer",
@@ -157,15 +156,15 @@
         "assertion_jti",
         "access",
         "depth",
-        "root_grant",
-        "escalated",
+        "root_ref",
+        "runtime_ref",
         "iat"
       ],
       "additionalProperties": false
     },
     "DelegationPolicy": {
       "title": "DelegationPolicy",
-      "description": "Set by the owner on the root grant. Governs every spawn beneath it. Automatic mode permits a contained child grant without a new owner interaction. Manual mode requires owner interaction for every child grant.",
+      "description": "Set by the owner or trusted organizational policy in the server-side root authorization context. It is never accepted as authoritative from an agent. Automatic mode permits a strictly contained child grant without a new owner interaction. Manual mode requires owner interaction for every child grant. A wider child is always rejected; newly approved additional authority starts a separate root lineage.",
       "type": "object",
       "properties": {
         "mode": {
@@ -173,18 +172,13 @@
           "enum": ["automatic", "manual"],
           "description": "In automatic mode, the authorization server can issue a contained child grant without a new owner interaction. In manual mode, it must obtain owner approval for every child grant. An agent cannot approve its own request."
         },
-        "on_widen": {
-          "type": "string",
-          "enum": ["reject", "escalate"],
-          "description": "What the authorization server does when a child requests authority not contained in its parent's. `reject` fails the grant. `escalate` returns a GNAP interaction so the owner can approve the widening."
-        },
         "max_depth": {
           "type": "integer",
           "minimum": 0,
           "maximum": 32
         }
       },
-      "required": ["mode", "on_widen", "max_depth"],
+      "required": ["mode", "max_depth"],
       "additionalProperties": false
     }
   }

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agnap.dev/schema/authority.json",
+  "$id": "urn:agnap:schema:authority:0.2.0",
   "title": "Authority",
-  "description": "The AGNAP authority model. An authority is a GNAP access object of type `agent_operation`. It names the operations an agent may invoke at a vault and, for every argument of every operation, the constraint that argument must satisfy. Arguments not named are not permitted (closed world). Ceilings bound the cumulative use of an operation across calls. Wire messages reference `#/$defs/AgentOperationAccess` directly; the root is a one-member union so that generators emit every definition.",
+  "description": "The planned AGNAP authority model. An authority is a GNAP access object of type `agent_operation`. It names the operations an agent may invoke at an execution service and, for every argument of every operation, the constraint that argument must satisfy. Arguments not named are not permitted (closed world). Ceilings bound the cumulative use of an operation across calls. Wire messages reference `#/$defs/AgentOperationAccess` directly; the root is a one-member union so that generators emit every definition.",
   "oneOf": [
     {
       "$ref": "#/$defs/AgentOperationAccess"
@@ -16,18 +16,18 @@
     },
     "OperationName": {
       "title": "OperationName",
-      "description": "The name of an operation exposed by a vault connector, for example `record.read` or `create_payment`.",
+      "description": "The name of an operation exposed by an execution-service connector, for example `record.read` or `create_payment`.",
       "type": "string",
-      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+      "pattern": "^[A-Za-z0-9_.:/-]{1,200}$"
     },
     "ArgumentName": {
       "title": "ArgumentName",
       "type": "string",
-      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+      "pattern": "^[A-Za-z0-9_.-]{1,100}$"
     },
     "ExactConstraint": {
       "title": "ExactConstraint",
-      "description": "The argument must equal this value. The only constraint milestone 1 evaluates.",
+      "description": "The argument must equal this value. The shipped profile evaluates this and wildcard constraints.",
       "type": "object",
       "properties": {
         "exact": {

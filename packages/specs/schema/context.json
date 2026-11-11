@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agnap:schema:context:0.2.0",
+  "title": "Authorization and Runtime Context",
+  "description": "AGNAP trust context. A root grant can be authorized by local deployment policy or, optionally, by an external user or organization identity. Signed runtime evidence binds the authority to a running instance and its key. Root authorization and credential bindings are server-side records and are not disclosed to agents. The root is a union so generators emit every definition.",
+  "oneOf": [
+    { "$ref": "#/$defs/RootAuthorizationContext" },
+    { "$ref": "#/$defs/RuntimeEvidenceEnvelope" },
+    { "$ref": "#/$defs/RuntimeEvidenceClaims" },
+    { "$ref": "#/$defs/ExternalAuthority" },
+    { "$ref": "#/$defs/CredentialBinding" }
+  ],
+  "$defs": {
+    "OpaqueRef": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "RootRef": {
+      "title": "RootRef",
+      "description": "Stable opaque reference for the root authorization and its mutable state. It survives token rotation and is shared by every descendant.",
+      "$ref": "#/$defs/OpaqueRef"
+    },
+    "RuntimeRef": {
+      "title": "RuntimeRef",
+      "description": "Opaque identifier assigned by a trusted runtime attestor to one running agent instance.",
+      "$ref": "#/$defs/OpaqueRef"
+    },
+    "PrincipalRef": {
+      "title": "PrincipalRef",
+      "description": "Pairwise opaque reference to the user or organization that authorized the root. Raw IdP subject identifiers are not sent to agents or execution services.",
+      "$ref": "#/$defs/OpaqueRef"
+    },
+    "ApprovalRef": {
+      "title": "ApprovalRef",
+      "description": "Opaque reference to the interaction or policy decision that approved the root authority.",
+      "$ref": "#/$defs/OpaqueRef"
+    },
+    "SecurityDomainRef": {
+      "title": "SecurityDomainRef",
+      "description": "Opaque deployment, tenant or local-owner boundary. Every root and credential binding has one even when no external identity system is used.",
+      "$ref": "#/$defs/OpaqueRef"
+    },
+    "Sha256Base64Url": {
+      "title": "Sha256Base64Url",
+      "description": "SHA-256 digest, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "RuntimeEvidenceEnvelope": {
+      "title": "RuntimeEvidenceEnvelope",
+      "description": "AGNAP extension carried in `runtime_evidence` on a root or delegated grant request. The compact JWS is issued by a runtime attestor trusted by the authorization server. The agent may relay it but cannot create or modify it.",
+      "type": "object",
+      "properties": {
+        "attestation": {
+          "type": "string",
+          "description": "Compact JWS whose payload is RuntimeEvidenceClaims.",
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+        }
+      },
+      "required": ["attestation"],
+      "additionalProperties": false
+    },
+    "RuntimeEvidenceClaims": {
+      "title": "RuntimeEvidenceClaims",
+      "description": "A trusted statement that one runtime instance started with the named key. For a root, `parent_runtime_ref` is absent. For a child, it is required and must equal the runtime bound to the parent grant. The authorization server verifies issuer trust, audience, time, nonce and single-use event_id before binding the grant.",
+      "type": "object",
+      "properties": {
+        "iss": {
+          "type": "string",
+          "format": "uri",
+          "description": "Trusted runtime attestor identifier."
+        },
+        "aud": {
+          "type": "string",
+          "format": "uri",
+          "description": "AGNAP authorization server grant endpoint."
+        },
+        "runtime_ref": { "$ref": "#/$defs/RuntimeRef" },
+        "parent_runtime_ref": { "$ref": "#/$defs/RuntimeRef" },
+        "key_thumbprint": {
+          "$ref": "#/$defs/Sha256Base64Url",
+          "description": "RFC 7638 thumbprint of the key in the GNAP client instance."
+        },
+        "event": {
+          "const": "start",
+          "description": "This evidence records a runtime start event."
+        },
+        "event_id": {
+          "$ref": "#/$defs/OpaqueRef",
+          "description": "Single-use event identifier remembered until exp."
+        },
+        "iat": { "type": "integer", "minimum": 0 },
+        "exp": { "type": "integer", "minimum": 0 },
+        "nonce": { "$ref": "#/$defs/OpaqueRef" }
+      },
+      "required": [
+        "iss",
+        "aud",
+        "runtime_ref",
+        "key_thumbprint",
+        "event",
+        "event_id",
+        "iat",
+        "exp",
+        "nonce"
+      ],
+      "additionalProperties": false
+    },
+    "RootAuthorizationContext": {
+      "title": "RootAuthorizationContext",
+      "description": "Server-side record connecting a security domain, runtime instance and root authority. It is never accepted from an agent and is not returned through token introspection. `external_authority` is optional: a local or self-hosted deployment can authorize the root through trusted deployment policy without introducing an external identity system.",
+      "type": "object",
+      "properties": {
+        "root_ref": { "$ref": "#/$defs/RootRef" },
+        "security_domain_ref": { "$ref": "#/$defs/SecurityDomainRef" },
+        "external_authority": { "$ref": "#/$defs/ExternalAuthority" },
+        "authority_hash": { "$ref": "#/$defs/Sha256Base64Url" },
+        "delegation_policy": {
+          "$ref": "urn:agnap:schema:delegation:0.2.0#/$defs/DelegationPolicy"
+        },
+        "runtime_ref": { "$ref": "#/$defs/RuntimeRef" },
+        "status": {
+          "type": "string",
+          "enum": ["active", "revoked", "expired"]
+        },
+        "created_at": { "type": "integer", "minimum": 0 },
+        "expires_at": { "type": "integer", "minimum": 0 }
+      },
+      "required": [
+        "root_ref",
+        "security_domain_ref",
+        "authority_hash",
+        "delegation_policy",
+        "runtime_ref",
+        "status",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "ExternalAuthority": {
+      "title": "ExternalAuthority",
+      "description": "Optional server-side evidence that an externally authenticated user or organization approved the root. A deployment-specific identity adapter creates this object. Raw IdP subject identifiers are reduced to a pairwise opaque principal_ref and are not sent to agents or execution services.",
+      "type": "object",
+      "properties": {
+        "principal_ref": { "$ref": "#/$defs/PrincipalRef" },
+        "identity_issuer": {
+          "type": "string",
+          "format": "uri",
+          "description": "Issuer of the external identity used for approval, when one exists."
+        },
+        "approval_ref": { "$ref": "#/$defs/ApprovalRef" },
+        "authorization_source": {
+          "type": "string",
+          "enum": ["interaction", "policy"],
+          "description": "Whether approval came through GNAP interaction or an externally backed organizational policy."
+        }
+      },
+      "required": ["principal_ref", "approval_ref", "authorization_source"],
+      "additionalProperties": false
+    },
+    "CredentialBinding": {
+      "title": "CredentialBinding",
+      "description": "Server-side execution-service record binding an opaque downstream credential reference to a security domain, connector and downstream account. A root may use the credential only when its security_domain_ref matches this record. An optional principal_ref can further constrain credentials enrolled through an external identity system.",
+      "type": "object",
+      "properties": {
+        "credential_ref": { "$ref": "#/$defs/OpaqueRef" },
+        "security_domain_ref": { "$ref": "#/$defs/SecurityDomainRef" },
+        "principal_ref": { "$ref": "#/$defs/PrincipalRef" },
+        "tenant_ref": { "$ref": "#/$defs/OpaqueRef" },
+        "connector": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "account_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Connector-specific opaque account reference, not a credential."
+        },
+        "created_at": { "type": "integer", "minimum": 0 },
+        "revoked_at": { "type": "integer", "minimum": 0 }
+      },
+      "required": [
+        "credential_ref",
+        "security_domain_ref",
+        "connector",
+        "account_ref",
+        "created_at"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

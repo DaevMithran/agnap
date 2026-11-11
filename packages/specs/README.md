@@ -1,8 +1,9 @@
 # @agnap/specs
 
-The normative OpenAPI and JSON Schema artifacts for AGNAP. Nothing in this
-package is executable code. Implementations can generate native types from
-these files and use the same schemas to validate protocol traffic at runtime.
+The shipped OpenAPI contracts and forward-looking JSON Schema artifacts for
+AGNAP. Nothing in this package is executable code. Implementations can generate
+native types from the current contracts; planned schemas are design inputs until
+an implementation adopts them.
 
 This follows the pattern of
 [interledger/open-payments-specifications](https://github.com/interledger/open-payments-specifications),
@@ -12,18 +13,26 @@ the Open Payments `auth-server.yaml`.
 
 ```text
 openapi/
-  as.yaml           Authorization Server grant and token introspection API
-  vault.yaml        agent operation invocation API and error shapes
+  as.yaml           GNAP authorization server profile: grant, continue, revoke, introspect
+  local-owner.yaml  the non-RFC local owner extension, /local/grants
 schema/
-  authority.json    operations, constraints, validity windows and ceilings
-  delegation.json   delegation assertion claims and AS-signed receipts
+  agent-operation.json  shipped agent_operation access type
+  authority.json    planned operations, constraints, validity windows and ceilings
+  context.json      planned approval, runtime evidence and credential binding
+  delegation.json   planned delegation assertions and AS-signed receipts
 VERSION             one version for all files, bumped together
 ```
 
-`authority.json` and `delegation.json` are written in JSON Schema 2020-12,
-which OpenAPI 3.1 shares, so `as.yaml` references them instead of restating
-them. They are also the appendix a future Internet-Draft will reference, and
-what a port in another language validates against.
+`as.yaml`, `local-owner.yaml`, and `schema/agent-operation.json` describe the
+currently shipped surface. The other files under `schema/` are forward-looking design artifacts for delegation,
+runtime evidence, credential binding, validity windows, and conserved ceilings;
+the current packages do not implement those complete schemas. They are kept as
+JSON Schema 2020-12 candidates for a future Internet-Draft and should not be
+read as claims about shipped behavior.
+
+The retired vault OpenAPI document moved to the ignored local archive with its
+implementation. A future execution-service API should be designed from the
+current resource-server boundary rather than reviving that document.
 
 ## Conventions
 
@@ -38,9 +47,11 @@ what a port in another language validates against.
 ## Working on the specification
 
 ```sh
+pnpm --filter @agnap/specs generate # regenerate TypeScript types and runtime schema bundles
 pnpm --filter @agnap/specs lint     # redocly lint
 ```
 
-Changes must keep the OpenAPI documents and referenced JSON Schemas valid.
-Implementations consuming the package are responsible for regenerating any
-derived language types after a specification update.
+Generated TypeScript types and Ajv schema bundles live in the packages that
+consume them. The lint command fails when those artifacts are stale. Tests
+compile all published JSON Schemas together under JSON Schema 2020-12 and
+validate exercised handler responses against the generated validators.
