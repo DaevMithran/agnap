@@ -1,0 +1,30 @@
+{
+  "name": "@agnap/gnap-core",
+  "version": "0.1.0",
+  "description": "GNAP (RFC 9635, RFC 9767) message types, access type handlers, Ed25519 keys and the GNAP httpsig profile over http-message-sig (RFC 9421). No I/O.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "http-message-sig": "0.3.0",
+    "structured-headers": "2.0.3"
+  }
+}
