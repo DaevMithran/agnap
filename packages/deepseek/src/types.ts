@@ -38,7 +38,15 @@ export interface SessionGrantStore {
 
 export interface GrantClient {
   readonly clientSigner: Signer;
-  requestGrant(access: AgentOperationAccess[], signal?: AbortSignal): Promise<GrantResponse>;
+  /**
+   * Request a grant. `display` is RFC 9635 `client.display`, shown to the
+   * owner as an unverified label for the agent.
+   */
+  requestGrant(
+    access: AgentOperationAccess[],
+    signal?: AbortSignal,
+    display?: { name: string },
+  ): Promise<GrantResponse>;
   continueGrant(
     uri: string,
     continuationToken: string,
@@ -120,4 +128,6 @@ export interface AuthorizeToolInput {
   callId?: unknown;
   arguments: unknown;
   signal: AbortSignal;
+  /** How the owner should see this agent, for example `agent child (subagent of parent)`. */
+  agentLabel?: string;
 }

@@ -3,15 +3,16 @@
  *
  * Real AgentLoop, tool registry and ApprovalService; a scripted model; the
  * plugin mounted through its Cordis entry point; the real gnap-server over
- * loopback HTTP. The tools are fakes that record whether they ran: there is
- * no executor yet, so this covers the in-process gate, not credential
- * isolation.
+ * loopback HTTP; and a scripted owner using @agnap/owner, whose every
+ * decision is signed with the owner key. The plugin holds no owner
+ * credential. The tools are fakes that record whether they ran: there is no
+ * executor yet, so this covers the in-process gate, not credential isolation.
  *
  * Run with ./run.sh, which places this file in the Harness tree at
  * packages/test-support/agent-loop-testkit/tests/ and sets AGNAP_ROOT.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,7 +42,11 @@ const {
   StaticResourceServerRegistry,
 } = await import(`${root}/packages/gnap-server/dist/index.js`);
 const { agentOperationHandler } = await import(`${root}/packages/access-types/dist/index.js`);
-const { parsePublicJwk } = await import(`${root}/packages/gnap-core/dist/index.js`);
+const { Ed25519Signer, parsePublicJwk } = await import(`${root}/packages/gnap-core/dist/index.js`);
+const { OwnerClient, watch } = await import(`${root}/packages/owner/dist/index.js`);
+
+/** Polling interval the server hands out; the plugin waits this long between continuations. */
+const CONTINUE_WAIT_SECONDS = 1;
 
 const contexts: Context[] = [];
 const closers: (() => Promise<void> | void)[] = [];
@@ -57,6 +62,12 @@ interface AsLog {
   at: number;
 }
 
+interface OwnerDecisionLog {
+  agent: string | undefined;
+  decision: 'approve' | 'deny';
+  at: number;
+}
+
 async function startAs() {
   const port = 40000 + Math.floor(Math.random() * 20000);
   const issuer = `http://127.0.0.1:${port}/`;
@@ -67,19 +78,24 @@ async function startAs() {
   const rsRegistry = new StaticResourceServerRegistry([
     { id: 'deepseek-harness', key: parsePublicJwk(publicJwk), accessTypes: ['agent_operation'] },
   ]);
+  const ownerSigner = Ed25519Signer.generate('agnap-owner');
   const store = new MemoryStore();
-  // The default 5-second polling interval: approval must not have to wait it out.
   const server = createServer(
-    { issuer, registry: rsRegistry, accessTypes: [agentOperationHandler], decision: pendingOwner },
+    {
+      issuer,
+      registry: rsRegistry,
+      accessTypes: [agentOperationHandler],
+      decision: pendingOwner,
+      continueWaitSeconds: CONTINUE_WAIT_SECONDS,
+    },
     store,
   );
-  const secret = randomBytes(24).toString('hex');
   const inner = createHandler({
     server,
     store,
     rsRegistry,
     publicUrl: issuer,
-    localOwner: { secret },
+    owner: { key: ownerSigner.publicJwk },
   });
   const log: AsLog[] = [];
   const handler = async (req: Request) => {
@@ -97,8 +113,33 @@ async function startAs() {
   const dir = mkdtempSync(join(tmpdir(), 'agnap-'));
   const keyFile = join(dir, 'rs.jwk');
   writeFileSync(keyFile, JSON.stringify(privateJwk));
-  process.env.AGNAP_TEST_OWNER_SECRET = secret;
-  return { issuer, keyFile, log };
+  return { issuer, keyFile, log, ownerSigner };
+}
+
+/** The owner, in its own loop: answers each pending grant from `answers`, signed with the owner key. */
+function startOwner(
+  issuer: string,
+  ownerSigner: unknown,
+  answers: ('approve' | 'deny')[],
+): OwnerDecisionLog[] {
+  const decisions: OwnerDecisionLog[] = [];
+  const controller = new AbortController();
+  const running = watch({
+    client: new OwnerClient({ issuer, signer: ownerSigner }),
+    decide: (grant: { client_display?: { name?: string } }) => {
+      const decision = answers.shift() ?? 'deny';
+      decisions.push({ agent: grant.client_display?.name, decision, at: Date.now() });
+      return Promise.resolve({ kind: decision });
+    },
+    log: () => undefined,
+    signal: controller.signal,
+    intervalMs: 50,
+  });
+  closers.unshift(async () => {
+    controller.abort();
+    await running;
+  });
+  return decisions;
 }
 
 const listIssuesProfile = {
@@ -110,27 +151,27 @@ const listIssuesProfile = {
   },
 };
 
-type Answer = 'allowed-once' | 'rejected';
-
-async function harness(script: unknown[], answers: Answer[]) {
+async function harness(script: unknown[], answers: ('approve' | 'deny')[]) {
   const as = await startAs();
+  const owner = startOwner(as.issuer, as.ownerSigner, answers);
   const ctx = new Context();
   contexts.push(ctx);
   await mountAgentLoopTestDependencies(ctx);
   await ctx.plugin(AgentLoop, { agents: [] });
+  // Mounted to show the plugin no longer goes through the Harness approval prompt.
   await ctx.plugin(ApprovalService, {});
-  const asked: { toolName: string; reason?: string; at: number }[] = [];
-  ctx.on('approval/request', async (req: { toolName: string; reason?: string }) => {
-    asked.push({ toolName: req.toolName, reason: req.reason, at: Date.now() });
-    return answers.shift() ?? 'rejected';
+  let harnessPrompts = 0;
+  ctx.on('approval/request', async () => {
+    harnessPrompts += 1;
+    return 'rejected';
   });
   await ctx.plugin(AgnapDeepseek, {
     issuer: as.issuer,
     resourceServerId: 'deepseek-harness',
     resourceServerPrivateJwkFile: as.keyFile,
-    simulateOwnerSecretEnv: 'AGNAP_TEST_OWNER_SECRET',
     profiles: [listIssuesProfile],
     denyUnprofiledTools: true,
+    ownerWaitSeconds: 10,
   });
   const ran: unknown[] = [];
   ctx.tools.register(
@@ -157,7 +198,7 @@ async function harness(script: unknown[], answers: Answer[]) {
     }),
   );
   ctx.llm.registerAdapter(['mock'], new MockAdapter(script as never));
-  return { ctx, as, asked, ran, rogue: () => rogueRan };
+  return { ctx, as, owner, ran, rogue: () => rogueRan, harnessPrompts: () => harnessPrompts };
 }
 
 function events(agent: Agent): readonly SessionEvent[] {
@@ -186,31 +227,49 @@ async function rootAgent(ctx: Context, id: string) {
   return handle;
 }
 
+async function childAgent(ctx: Context, id: string, parent: Agent, delegated: boolean) {
+  const child = await ctx.agents.create({
+    sessionId: SessionId(id),
+    parentAgent: parent,
+    meta: { parentSession: parent.id, origin: 'subagent', delegationDepth: 1 },
+    agentOptions: { provider: 'mock', model: 'mock' },
+  } as never);
+  if (delegated) {
+    // The event dsh-subagent's appendDelegatedPolicyOverrides writes for every delegated child.
+    (
+      child.agent as unknown as { session: { append(type: string, data: unknown): void } }
+    ).session.append('approval/policy', { policy: 'never', source: 'delegation' });
+  }
+  child.agent.followup(go());
+  await child.agent.whenIdle();
+  return child;
+}
+
 describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () => {
-  it('an uncovered call asks the owner, gets a key-bound grant, then runs', async () => {
+  it('an uncovered call waits for the owner, who approves in agnap-owner; the tool then runs', async () => {
     const h = await harness(
       [
         toolCallResponse('c1', 'list_issues', { repository: 'acme/docs', state: 'open' }),
         textResponse('done'),
       ],
-      ['allowed-once'],
+      ['approve'],
     );
     const { agent } = await rootAgent(h.ctx, 'a1');
-    expect(h.asked).toHaveLength(1);
-    expect(h.asked[0]?.reason).toContain('not only this call');
+    expect(h.owner).toEqual([expect.objectContaining({ agent: 'agent a1', decision: 'approve' })]);
+    expect(h.harnessPrompts()).toBe(0);
     expect(h.ran).toHaveLength(1);
     expect(toolResults(agent)[0]?.isError).toBe(false);
   });
 
-  it('the grant arrives within a second of approval, despite a 5-second polling interval', async () => {
+  it('the token arrives on the plugin’s next poll after the owner approves', async () => {
     const h = await harness(
       [toolCallResponse('c1', 'list_issues', { repository: 'acme/docs' }), textResponse('done')],
-      ['allowed-once'],
+      ['approve'],
     );
     await rootAgent(h.ctx, 'latency');
-    const approved = h.asked[0]!.at;
+    const approved = h.owner[0]!.at;
     const issued = h.as.log.find((l) => l.path.startsWith('/continue/') && l.status === 200)!.at;
-    expect(issued - approved).toBeLessThan(1000);
+    expect(issued - approved).toBeLessThan(CONTINUE_WAIT_SECONDS * 1000 + 500);
   });
 
   it('a second covered call in the same session runs without asking', async () => {
@@ -220,27 +279,30 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
         toolCallResponse('c2', 'list_issues', { repository: 'acme/docs', state: 'closed' }),
         textResponse('done'),
       ],
-      ['allowed-once'],
+      ['approve'],
     );
     const { agent } = await rootAgent(h.ctx, 'a2');
-    expect(h.asked).toHaveLength(1);
+    expect(h.owner).toHaveLength(1);
     expect(h.ran).toHaveLength(2);
     expect(toolResults(agent).every((r) => !r.isError)).toBe(true);
   });
 
-  it('a call outside the grant asks again; when the owner rejects, the tool does not run', async () => {
+  it('a call outside the grant asks again; when the owner denies, the tool does not run', async () => {
     const h = await harness(
       [
         toolCallResponse('c1', 'list_issues', { repository: 'acme/docs' }),
         toolCallResponse('c2', 'list_issues', { repository: 'acme/secrets' }),
         textResponse('done'),
       ],
-      ['allowed-once', 'rejected'],
+      ['approve', 'deny'],
     );
     const { agent } = await rootAgent(h.ctx, 'a3');
-    expect(h.asked).toHaveLength(2);
+    expect(h.owner.map((d) => d.decision)).toEqual(['approve', 'deny']);
     expect(h.ran).toEqual([{ repository: 'acme/docs' }]);
-    expect(toolResults(agent)[1]?.isError).toBe(true);
+    expect(toolResults(agent)[1]).toEqual({
+      isError: true,
+      text: 'Error: the owner denied the grant',
+    });
   });
 
   it('an unprofiled tool is denied without asking', async () => {
@@ -250,7 +312,7 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
     );
     const { agent } = await rootAgent(h.ctx, 'a4');
     expect(h.rogue()).toBe(false);
-    expect(h.asked).toHaveLength(0);
+    expect(h.owner).toHaveLength(0);
     expect(toolResults(agent)[0]?.isError).toBe(true);
   });
 
@@ -260,7 +322,7 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
         toolCallResponse('c1', 'list_issues', { repository: 'acme/docs', label: 'x' }),
         textResponse('done'),
       ],
-      ['allowed-once'],
+      ['approve'],
     );
     const { agent } = await rootAgent(h.ctx, 'a5');
     expect(h.ran).toHaveLength(0);
@@ -270,7 +332,7 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
   it('disposing one agent revokes its token', async () => {
     const h = await harness(
       [toolCallResponse('c1', 'list_issues', { repository: 'acme/docs' }), textResponse('done')],
-      ['allowed-once'],
+      ['approve'],
     );
     const handle = await rootAgent(h.ctx, 'a6');
     const before = h.as.log.length;
@@ -289,7 +351,7 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
         toolCallResponse('c2', 'list_issues', { repository: 'acme/app' }),
         textResponse('two done'),
       ],
-      ['allowed-once', 'allowed-once'],
+      ['approve', 'approve'],
     );
     await rootAgent(h.ctx, 'one');
     await rootAgent(h.ctx, 'two');
@@ -300,7 +362,7 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
     expect(deletes).toHaveLength(2);
   });
 
-  it('a child agent exposes its parent through session.header, and gets its own key', async () => {
+  it('the owner sees a subagent named with its parent, and the child gets its own key', async () => {
     const h = await harness(
       [
         toolCallResponse('p1', 'list_issues', { repository: 'acme/docs' }),
@@ -308,29 +370,21 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
         toolCallResponse('k1', 'list_issues', { repository: 'acme/docs' }),
         textResponse('child done'),
       ],
-      ['allowed-once', 'allowed-once'],
+      ['approve', 'approve'],
     );
     const parent = await rootAgent(h.ctx, 'parent');
-    const child = await h.ctx.agents.create({
-      sessionId: SessionId('child'),
-      parentAgent: parent.agent,
-      meta: { parentSession: SessionId('parent'), origin: 'subagent', delegationDepth: 1 },
-      agentOptions: { provider: 'mock', model: 'mock' },
-    } as never);
-    child.agent.followup(go());
-    await child.agent.whenIdle();
-    const header = (child.agent as unknown as { session: { header: Record<string, unknown> } })
-      .session.header;
-    expect(header.parentSession).toBe('parent');
-    expect(header.delegationDepth).toBe(1);
-    // Today the child is treated as a new root: a second grant request and a second owner prompt.
+    const child = await childAgent(h.ctx, 'child', parent.agent, false);
+    expect(h.owner.map((d) => d.agent)).toEqual([
+      'agent parent',
+      'agent child (subagent of parent)',
+    ]);
     expect(h.as.log.filter((l) => l.path === '/')).toHaveLength(2);
-    expect(h.asked).toHaveLength(2);
+    expect(h.ran).toHaveLength(2);
     await child.dispose();
     await parent.dispose();
   });
 
-  it('KNOWN GAP: a child with the delegation-pinned "never" approval policy cannot use any profiled tool', async () => {
+  it('a delegated child (approval policy "never") gets a grant from the owner, not yet from its parent', async () => {
     const h = await harness(
       [
         toolCallResponse('p1', 'list_issues', { repository: 'acme/docs' }),
@@ -338,24 +392,15 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
         toolCallResponse('k1', 'list_issues', { repository: 'acme/docs' }),
         textResponse('child done'),
       ],
-      ['allowed-once', 'allowed-once'],
+      ['approve', 'approve'],
     );
     const parent = await rootAgent(h.ctx, 'parent8');
-    const child = await h.ctx.agents.create({
-      sessionId: SessionId('child8'),
-      parentAgent: parent.agent,
-      meta: { parentSession: SessionId('parent8'), origin: 'subagent', delegationDepth: 1 },
-      agentOptions: { provider: 'mock', model: 'mock' },
-    } as never);
-    // The event dsh-subagent's appendDelegatedPolicyOverrides writes for every delegated child.
-    (
-      child.agent as unknown as { session: { append(type: string, data: unknown): void } }
-    ).session.append('approval/policy', { policy: 'never', source: 'delegation' });
-    child.agent.followup(go());
-    await child.agent.whenIdle();
-    // Flips when child grants are derived from the parent instead of asking the owner.
-    expect(toolResults(child.agent)[0]).toEqual({ isError: true, text: 'Error: grant rejected' });
-    expect(h.ran).toHaveLength(1);
+    const child = await childAgent(h.ctx, 'child8', parent.agent, true);
+    expect(toolResults(child.agent)[0]?.isError).toBe(false);
+    expect(h.ran).toHaveLength(2);
+    // Child grants are still a fresh owner decision; deriving them from the parent is the next step.
+    expect(h.owner).toHaveLength(2);
+    expect(h.harnessPrompts()).toBe(0);
     await child.dispose();
     await parent.dispose();
   });

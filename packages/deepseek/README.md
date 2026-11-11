@@ -27,40 +27,36 @@ points. The local PoC configuration contains:
 
 - the GNAP issuer URL;
 - the registered resource-server id and a path to its Ed25519 private JWK;
-- the name of the environment variable holding the local-owner secret; and
-- the fixed tool profiles.
+- the fixed tool profiles; and
+- optionally, how long a call waits for the owner (`ownerWaitSeconds`, default
+  300).
 
 The AS resource-server registry must contain the matching public JWK with the
 `agent_operation` access type. Session client keys and grants remain in memory
 and are keyed by the Harness agent's `id`.
 
-The development-only `LocalOwnerClient` lets the Harness approval prompt drive
-the local owner extension. It deliberately puts an owner secret in the plugin
-process and must not be used as a production interaction mechanism.
+The plugin holds no owner credential and cannot approve a grant. When a call
+needs a new grant, the plugin requests it, naming the agent in RFC 9635
+`client.display` (for example `agent child (subagent of parent)`), and waits
+for the server to issue or deny it. The owner decides in a separate process with
+[`agnap-owner`](../owner/README.md), whose requests the server accepts only
+when they are signed with the owner key. The Harness approval prompt is not
+used, so delegated subagents, whose approval policy the Harness pins to
+`never`, can also be granted access. If the owner does not decide within
+`ownerWaitSeconds`, the call is denied. Once a grant is issued the plugin
+delegates with `next()`, so it does not bypass later Harness policies.
 
-The high-level config accepts only a key-file path and environment-variable
-name, never inline private material. Both remain development-only. Production
-deployment needs a key-provider adapter and a real GNAP interaction mode.
-
-Unlike a normal `{ kind: 'ask' }` policy, the adapter calls the Harness approval
-service inside its listener. This is necessary because the plugin must approve
-the pending GNAP grant and finish continuation before it permits the first tool
-execution. Once GNAP authorization succeeds it delegates with `next()`, so it
-does not bypass later Harness policies.
+The config accepts only a key-file path, never inline private material.
+Production deployment still needs a key-provider adapter.
 
 No operation profiles are built in. Profiles must be written against the exact
 tool schemas in the pinned Harness deployment; unknown arguments fail closed.
 Each mapped argument must also choose its authority role: `identity` binds the
 grant to the observed value (for example, a repository), while `free` requests
 a wildcard (for example, a pull-request title). The default is `identity`.
-Calls outside an existing grant request a new grant and prompt again; they are
-not hard-denied merely because another grant covers the same operation.
-
-The development owner bridge is intentionally approve/reject only. The prompt
-shows both the mapped GNAP scope (`repository = "acme/app", title = any`) and
-the concrete call, but it does not provide controls for narrowing that scope.
-The server's owner API supports narrowing; a production interaction UI must
-expose that capability before claiming the user shaped the scope.
+Calls outside an existing grant request a new grant and ask the owner again;
+they are not hard-denied merely because another grant covers the same
+operation.
 
 The plugin and protected tool dispatcher currently share one process. There is
 therefore no resource-request signature to verify at tool-use time. The AS
@@ -83,20 +79,18 @@ session's grants when it unloads, waiting at most `unloadRevokeTimeoutMs`
 (default 3000). A grant the server cannot be reached to revoke stays live until
 its TTL.
 
-The Harness approval prompt offers only "allow once", but an approved grant
-covers every later call within its scope until it expires. The prompt text says
-so. After the owner decides, the plugin continues the grant immediately rather
-than waiting out the server's polling interval.
+Hosts that construct `GnapToolAuthorizer` themselves may still pass an `owner`
+port, which collects the decision through the Harness approval prompt. That
+path puts the owner's power in the agent's process and exists for tests; the
+entry point never uses it.
 
 ## Run the local PoC with DeepSeek Harness
 
-This walkthrough uses the Harness browser approval channel and the
-development-only local-owner bridge. It is verified against DeepSeek Harness
-`0.2.1-alpha.1` at commit `5badb15009ae1756c3afe0ae0cef1faafc290ccc`.
-The authorization server and Harness may run in separate terminals, but both
-must receive the same `GNAP_OWNER_SECRET` value.
+This walkthrough is verified against DeepSeek Harness `0.2.1-alpha.1` at commit
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`. It uses three terminals: the
+authorization server, the owner, and the Harness.
 
-### 1. Build AGNAP and create demo credentials
+### 1. Build AGNAP and create keys
 
 From the AGNAP checkout:
 
@@ -104,28 +98,39 @@ From the AGNAP checkout:
 pnpm install
 pnpm build
 node packages/deepseek/examples/create-demo-keys.mjs /tmp/agnap-deepseek-demo
+node packages/owner/dist/cli.js keygen ~/.config/agnap-owner
 ```
 
-The helper refuses to overwrite existing files. Choose a new empty directory
-when repeating the setup. The private JWK and owner secret are development
-credentials; do not commit or reuse them.
+The first command writes the resource-server key and registry the plugin and
+server share. The second writes the owner key pair; keep `owner.jwk` away from
+the agent's user. Both refuse to overwrite existing files.
 
 ### 2. Start the authorization server
 
-In the AGNAP checkout:
-
 ```sh
-export GNAP_OWNER_SECRET="$(tr -d '\n' < /tmp/agnap-deepseek-demo/owner-secret)"
 pnpm gnap-server serve \
   --port 4000 \
   --issuer http://127.0.0.1:4000/ \
-  --rs-registry /tmp/agnap-deepseek-demo/deepseek-rs-registry.json
+  --rs-registry /tmp/agnap-deepseek-demo/deepseek-rs-registry.json \
+  --owner-key ~/.config/agnap-owner/owner.pub.jwk \
+  --continue-wait 1
 ```
 
-The startup line should report `owner-extension=on`. Loopback HTTP and the
+The startup line should report `owner=owner-key`. `--continue-wait 1` makes
+the plugin pick up the owner's decision within a second. Loopback HTTP and the
 in-memory store are suitable only for this local demonstration.
 
-### 3. Add the plugin to the Harness composition
+### 3. Start the owner
+
+```sh
+node packages/owner/dist/cli.js watch --url http://127.0.0.1:4000/
+```
+
+Each pending grant appears as a card: the agent's name, each requested
+operation with its arguments, and the time left. Answer `a` to approve, `n` to
+keep only some operations, `d` to deny or `s` to skip.
+
+### 4. Add the plugin to the Harness composition
 
 Create `/tmp/agnap-deepseek.overlay.yml`. Replace `/absolute/path/to/agnap`
 with the AGNAP checkout's absolute path:
@@ -138,8 +143,8 @@ with the AGNAP checkout's absolute path:
         issuer: http://127.0.0.1:4000/
         resourceServerId: deepseek-harness
         resourceServerPrivateJwkFile: /tmp/agnap-deepseek-demo/deepseek-rs-private.jwk
-        simulateOwnerSecretEnv: GNAP_OWNER_SECRET
         tokenTtlSeconds: 600
+        ownerWaitSeconds: 300
         denyUnprofiledTools: false
         unloadRevokeTimeoutMs: 3000
         profiles:
@@ -169,36 +174,28 @@ human-readable description and justification to vary. Optional execution
 controls become exact constraints when supplied. Tools without a profile still
 flow to later Harness policies because `denyUnprofiledTools` is false.
 
-### 4. Start DeepSeek Harness
+### 5. Start DeepSeek Harness
 
-From the pinned DeepSeek Harness checkout, export the same owner secret and
-start the Web profile with the overlay:
+From the pinned DeepSeek Harness checkout:
 
 ```sh
-export GNAP_OWNER_SECRET="$(tr -d '\n' < /tmp/agnap-deepseek-demo/owner-secret)"
 pnpm dsh web --patch /tmp/agnap-deepseek.overlay.yml
 ```
 
-Use the Harness normally and ask the agent to execute a simple shell command,
-such as `pwd`. Before execution, the Harness approval panel should show the
-GNAP operation, constrained arguments, concrete call, and token lifetime.
+Ask the agent to execute a simple shell command, such as `pwd`. The tool call
+waits while the owner terminal shows the grant.
 
-### 5. Verify the behavior
+### 6. Verify the behavior
 
-- Approve the first `pwd` call: the plugin resolves the pending grant, obtains
-  a token through continuation, and then delegates to later Harness policies.
+- Approve the first `pwd` grant in the owner terminal: the plugin obtains a
+  token on its next poll and the command runs.
 - Repeat the same command before expiry: the active grant is introspected and
-  the GNAP prompt is not repeated.
+  the owner is not asked again.
 - Request a different command: its exact `command` constraint requires a new
-  grant and prompt.
-- Reject a request: the tool call is denied and no token is stored.
+  grant, which appears in the owner terminal.
+- Deny a grant: the tool call fails with "the owner denied the grant".
 - Dispose the agent: the plugin attempts to revoke every live session grant.
 - Stop the Harness: the plugin revokes the grants of every session.
 
-`harness-e2e/` automates these checks against the pinned Harness; see its
-README.
-
-Harness approval is the interaction channel in this mode. AGNAP does not need
-separate Slack or email configuration; any Harness answerer for
-`approval/request` can carry the same request. The pinned checkout includes the
-browser and ACP answerers, but no Slack or email answerer.
+`harness-e2e/` automates these checks against the pinned Harness with a
+scripted owner; see its README.

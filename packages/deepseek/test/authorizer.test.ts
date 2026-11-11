@@ -44,6 +44,9 @@ function fixture(
     sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     /** When false, the owner port records the decision but the grant stays pending at the server. */
     ownerReachesServer?: boolean;
+    /** No owner port: the owner decides outside the authorizer, through `localOwner`. */
+    externalOwner?: boolean;
+    ownerWaitSeconds?: number;
   } = {},
 ) {
   const rs = Ed25519Signer.generate('harness-plugin-rs');
@@ -107,7 +110,10 @@ function fixture(
       { toolName: 'shell.exec', arguments: { argv: { encoding: 'json' } } },
     ],
     clients,
-    owner,
+    ...(options.externalOwner === true ? {} : { owner }),
+    ...(options.ownerWaitSeconds !== undefined
+      ? { ownerWaitSeconds: options.ownerWaitSeconds }
+      : {}),
     grants,
     tokenTtlSeconds: options.tokenTtlSeconds ?? 600,
     ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
@@ -117,6 +123,8 @@ function fixture(
     grants,
     clients,
     clock,
+    store,
+    localOwner,
     ownerDecisions,
     introspections: () => introspections,
   };
@@ -130,6 +138,74 @@ const input = (overrides: Partial<AuthorizeToolInput> = {}): AuthorizeToolInput 
   arguments: { repository: 'acme/app', title: 'Fix login' },
   signal: new AbortController().signal,
   ...overrides,
+});
+
+describe('GNAP tool authorizer with an external owner', () => {
+  const noPrompt: ApprovalPort = {
+    request: () => Promise.reject(new Error('an external owner is never prompted in the Harness')),
+  };
+  /** Resolve the first pending grant from outside, as agnap-owner would, once the authorizer waits. */
+  const ownerDecidesWhilePolling = (
+    f: ReturnType<typeof fixture>,
+    decision: 'approve' | 'deny',
+  ) => {
+    let decided = false;
+    return async () => {
+      if (decided) return;
+      decided = true;
+      const [grant] = await f.store.listGrants('pending');
+      await f.localOwner.resolve(grant!.id, decision);
+    };
+  };
+
+  it('waits for the owner, sends the agent label, and never prompts in the Harness', async () => {
+    let decide: () => Promise<void> = () => Promise.resolve();
+    const f = fixture({
+      externalOwner: true,
+      continueWaitSeconds: 1,
+      sleep: () => decide(),
+    });
+    decide = ownerDecidesWhilePolling(f, 'approve');
+    const decision = await f.authorizer.authorize(
+      input({ agentLabel: 'agent child (subagent of parent)' }),
+      noPrompt,
+    );
+    expect(decision.kind).toBe('allow');
+    const [grant] = await f.store.listGrants();
+    expect(grant?.clientDisplay).toEqual({ name: 'agent child (subagent of parent)' });
+    expect(f.ownerDecisions).toEqual([]);
+  });
+
+  it('works without an approval service at all', async () => {
+    let decide: () => Promise<void> = () => Promise.resolve();
+    const f = fixture({ externalOwner: true, continueWaitSeconds: 1, sleep: () => decide() });
+    decide = ownerDecidesWhilePolling(f, 'approve');
+    expect((await f.authorizer.authorize(input())).kind).toBe('allow');
+  });
+
+  it('reports the owner denying the grant', async () => {
+    let decide: () => Promise<void> = () => Promise.resolve();
+    const f = fixture({ externalOwner: true, continueWaitSeconds: 1, sleep: () => decide() });
+    decide = ownerDecidesWhilePolling(f, 'deny');
+    expect(await f.authorizer.authorize(input())).toEqual({
+      kind: 'deny',
+      reason: 'the owner denied the grant',
+    });
+  });
+
+  it('gives up after ownerWaitSeconds when the owner never decides', async () => {
+    const f = fixture({
+      externalOwner: true,
+      continueWaitSeconds: 1,
+      ownerWaitSeconds: 1,
+      sleep: (milliseconds) =>
+        new Promise((resolve) => setTimeout(resolve, Math.min(milliseconds, 200))),
+    });
+    expect(await f.authorizer.authorize(input())).toEqual({
+      kind: 'deny',
+      reason: 'the owner did not decide within 1 seconds',
+    });
+  });
 });
 
 describe('GNAP tool authorizer', () => {

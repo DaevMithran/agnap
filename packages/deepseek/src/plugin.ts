@@ -4,7 +4,6 @@ import { parsePublicJwk } from '@agnap/gnap-core';
 import type { Ed25519PrivateJwk } from '@agnap/gnap-core';
 import { GnapToolAuthorizer } from './authorizer.js';
 import { InMemorySessionClientProvider } from './client.js';
-import { LocalOwnerClient } from './owner.js';
 import type { ApprovalPort, ToolProfile } from './types.js';
 
 export interface HarnessToolExecution {
@@ -70,9 +69,12 @@ export interface Config {
   resourceServerId: string;
   /** Development-only: path to a private JWK file. Never place the key inline in config. */
   resourceServerPrivateJwkFile: string;
-  /** Development-only: environment variable containing the local-owner secret. */
-  simulateOwnerSecretEnv: string;
   profiles: ToolProfile[];
+  /**
+   * How long a call that needs a new grant waits for the owner, who decides
+   * in a separate process (`agnap-owner`). Defaults to 300.
+   */
+  ownerWaitSeconds?: number;
   /** Must match the AS setting. Defaults to 600 and is shown in approval text. */
   tokenTtlSeconds?: number;
   /** Deny tools without a profile. Defaults to the Harness-compatible permissive mode. */
@@ -82,7 +84,8 @@ export interface Config {
 }
 
 export const name = '@agnap/deepseek';
-export const inject = ['approval'];
+/** The approval service is not needed: the owner decides outside the Harness. */
+export const inject: string[] = [];
 
 function loadPrivateJwk(path: string): Ed25519PrivateJwk {
   const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
@@ -113,12 +116,24 @@ const sessionIdFromAgent = (agent: unknown): string => {
 const agentSessionId = (execution: HarnessToolExecution): string =>
   sessionIdFromAgent(execution.agent);
 
+/**
+ * The owner's label for the calling agent: its session id, and its parent's
+ * when the Harness recorded one (`session.header.parentSession`).
+ * @param agent - the Harness agent on the tool execution.
+ * @returns for example `agent child (subagent of parent)`.
+ */
+export function agentLabelOf(agent: unknown): string | undefined {
+  const value = agent as
+    { id?: unknown; session?: { header?: { parentSession?: unknown } } } | undefined;
+  if (typeof value?.id !== 'string') return undefined;
+  const parent = value.session?.header?.parentSession;
+  return typeof parent === 'string'
+    ? `agent ${value.id} (subagent of ${parent})`
+    : `agent ${value.id}`;
+}
+
 /** Conventional Cordis plugin entry point for the local PoC deployment. */
 export function apply(context: HarnessContext, config: Config): void {
-  const secret = process.env[config.simulateOwnerSecretEnv];
-  if (secret === undefined || secret.length === 0) {
-    throw new Error(`owner secret environment variable ${config.simulateOwnerSecretEnv} is empty`);
-  }
   const resourceServerSigner = Ed25519Signer.fromJwk(
     loadPrivateJwk(config.resourceServerPrivateJwkFile),
   );
@@ -129,10 +144,7 @@ export function apply(context: HarnessContext, config: Config): void {
   const authorizer = new GnapToolAuthorizer({
     profiles: config.profiles,
     clients,
-    owner: new LocalOwnerClient({
-      issuer: config.issuer,
-      secret,
-    }),
+    ...(config.ownerWaitSeconds !== undefined ? { ownerWaitSeconds: config.ownerWaitSeconds } : {}),
     ...(config.tokenTtlSeconds !== undefined ? { tokenTtlSeconds: config.tokenTtlSeconds } : {}),
   });
   applyDeepSeekHarnessPlugin(context, {
@@ -191,19 +203,20 @@ export function applyDeepSeekHarnessPlugin(
       return { kind: 'deny', reason: 'GNAP authorization requires an agent session' };
     }
     const service = context.get('approval');
-    if (service === undefined) {
-      return { kind: 'deny', reason: 'GNAP authorization requires an approval service' };
-    }
-    const approval: ApprovalPort = {
-      request: (request) =>
-        service.request({
-          agent: request.agent,
-          toolName: request.toolName,
-          ...(request.callId !== undefined ? { callId: request.callId } : {}),
-          reason: request.reason,
-          signal: request.signal,
-        }),
-    };
+    const approval: ApprovalPort | undefined =
+      service === undefined
+        ? undefined
+        : {
+            request: (request) =>
+              service.request({
+                agent: request.agent,
+                toolName: request.toolName,
+                ...(request.callId !== undefined ? { callId: request.callId } : {}),
+                reason: request.reason,
+                signal: request.signal,
+              }),
+          };
+    const agentLabel = agentLabelOf(execution.agent);
     let decision;
     try {
       decision = await options.authorizer.authorize(
@@ -214,6 +227,7 @@ export function applyDeepSeekHarnessPlugin(
           ...(execution.callId !== undefined ? { callId: execution.callId } : {}),
           arguments: execution.arguments,
           signal: execution.signal,
+          ...(agentLabel !== undefined ? { agentLabel } : {}),
         },
         approval,
       );

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GnapToolAuthorizer,
   MemorySessionGrantStore,
+  agentLabelOf,
   applyDeepSeekHarnessPlugin,
 } from '../src/index.js';
 import type {
@@ -230,5 +231,15 @@ describe('DeepSeek Harness adapter', () => {
         unloadRevokeTimeoutMs: 0,
       }),
     ).toThrow(RangeError);
+  });
+});
+
+describe('agentLabelOf', () => {
+  it('names the agent and, for a subagent, its parent from session.header', () => {
+    expect(agentLabelOf({ id: 'root' })).toBe('agent root');
+    expect(agentLabelOf({ id: 'child', session: { header: { parentSession: 'root' } } })).toBe(
+      'agent child (subagent of root)',
+    );
+    expect(agentLabelOf(undefined)).toBeUndefined();
   });
 });

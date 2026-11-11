@@ -1,12 +1,13 @@
 import { coversAny } from '@agnap/access-types';
 import type { AgentOperationAccess } from '@agnap/access-types';
-import type { AccessToken } from '@agnap/gnap-core';
+import type { AccessToken, GrantResponse } from '@agnap/gnap-core';
 import { GnapHttpError, tokenFingerprint } from './client.js';
 import { mapToolCall, ToolProfileError, ToolProfileRegistry } from './profiles.js';
 import type {
   ApprovalPort,
   AuthorizationDecision,
   AuthorizeToolInput,
+  GrantClient,
   OwnerDecisionPort,
   SessionClientProvider,
   SessionGrantStore,
@@ -44,7 +45,15 @@ export class MemorySessionGrantStore implements SessionGrantStore {
 export interface GnapToolAuthorizerOptions {
   profiles: readonly ToolProfile[];
   clients: SessionClientProvider;
-  owner: OwnerDecisionPort;
+  /**
+   * Programmatic owner, for hosts that collect the decision through the
+   * Harness approval prompt. Omit it in deployments: the owner then decides
+   * in a separate process (`agnap-owner`) and the authorizer only waits for
+   * the server's answer, so nothing in the agent's process can approve.
+   */
+  owner?: OwnerDecisionPort;
+  /** How long a call waits for an external owner's decision. Defaults to 300. */
+  ownerWaitSeconds?: number;
   grants?: SessionGrantStore;
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   /** Expected AS token lifetime, shown to the owner before approval. */
@@ -91,7 +100,8 @@ const describeScope = (access: AgentOperationAccess, operation: string): string 
 export class GnapToolAuthorizer {
   readonly #profiles: ToolProfileRegistry;
   readonly #clients: SessionClientProvider;
-  readonly #owner: OwnerDecisionPort;
+  readonly #owner: OwnerDecisionPort | undefined;
+  readonly #ownerWaitSeconds: number;
   readonly #grants: SessionGrantStore;
   readonly #sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   readonly #tokenTtlSeconds: number;
@@ -106,6 +116,10 @@ export class GnapToolAuthorizer {
     this.#sleep = options.sleep ?? defaultSleep;
     this.#tokenTtlSeconds = options.tokenTtlSeconds ?? 600;
     this.#maxContinuationAttempts = options.maxContinuationAttempts ?? 20;
+    this.#ownerWaitSeconds = options.ownerWaitSeconds ?? 300;
+    if (!Number.isInteger(this.#ownerWaitSeconds) || this.#ownerWaitSeconds <= 0) {
+      throw new RangeError('ownerWaitSeconds must be a positive integer');
+    }
     if (!Number.isInteger(this.#tokenTtlSeconds) || this.#tokenTtlSeconds <= 0) {
       throw new RangeError('tokenTtlSeconds must be a positive integer');
     }
@@ -114,9 +128,13 @@ export class GnapToolAuthorizer {
     }
   }
 
+  /**
+   * Decide one tool call. `approval` is used only with a programmatic owner;
+   * with an external owner it may be omitted.
+   */
   async authorize(
     input: AuthorizeToolInput,
-    approval: ApprovalPort,
+    approval?: ApprovalPort,
   ): Promise<AuthorizationDecision> {
     try {
       return await this.#serialized(input.sessionId, () => this.#authorize(input, approval));
@@ -172,7 +190,7 @@ export class GnapToolAuthorizer {
 
   async #authorize(
     input: AuthorizeToolInput,
-    approval: ApprovalPort,
+    approval: ApprovalPort | undefined,
   ): Promise<AuthorizationDecision> {
     const profile = this.#profiles.get(input.toolName);
     if (profile === null) return { kind: 'unprofiled' };
@@ -204,13 +222,38 @@ export class GnapToolAuthorizer {
       }
     }
 
-    const pending = await client.requestGrant([call.access], input.signal);
+    const pending = await client.requestGrant(
+      [call.access],
+      input.signal,
+      input.agentLabel !== undefined ? { name: input.agentLabel } : undefined,
+    );
     if (pending.access_token !== undefined) {
       return this.#acceptIssued(input.sessionId, pending.access_token);
     }
     if (pending.continue === undefined)
       return { kind: 'deny', reason: 'grant response is incomplete' };
 
+    if (this.#owner === undefined) {
+      // The owner decides in their own channel (agnap-owner); wait for the server's answer.
+      const outcome = await this.#continueUntilDecided(client, pending.continue, input.signal, {
+        firstWaitSeconds: pending.continue.wait ?? 0,
+        deadline: Date.now() + this.#ownerWaitSeconds * 1000,
+        maxAttempts: Number.POSITIVE_INFINITY,
+      });
+      if (outcome.kind === 'token') return this.#acceptIssued(input.sessionId, outcome.token);
+      if (outcome.kind === 'timeout') {
+        return {
+          kind: 'deny',
+          reason: `the owner did not decide within ${this.#ownerWaitSeconds} seconds`,
+        };
+      }
+      return outcome;
+    }
+
+    const owner = this.#owner;
+    if (approval === undefined) {
+      return { kind: 'deny', reason: 'GNAP authorization requires an approval service' };
+    }
     const grantId = grantIdFrom(pending.continue.uri);
     let issuedSuccessfully = false;
     try {
@@ -229,49 +272,81 @@ export class GnapToolAuthorizer {
         return { kind: 'deny', reason: `grant ${outcome}` };
       }
 
-      await this.#owner.resolve(grantId, 'approve', input.signal);
-      let continuation = pending.continue;
+      await owner.resolve(grantId, 'approve', input.signal);
       // The owner has decided, so the first continuation does not wait out the
-      // polling interval; a server that still paces it answers too_fast below.
-      let waitSeconds = 0;
-      let token: AccessToken | undefined;
-      for (let attempt = 0; attempt < this.#maxContinuationAttempts; attempt += 1) {
-        const waitMilliseconds = waitSeconds * 1000;
-        if (waitMilliseconds > 0) await this.#sleep(waitMilliseconds, input.signal);
-        waitSeconds = 0;
-        try {
-          const response = await client.continueGrant(
-            continuation.uri,
-            continuation.access_token.value,
-            input.signal,
-          );
-          if (response.access_token !== undefined) {
-            token = response.access_token;
-            break;
-          }
-          if (response.continue === undefined) {
-            return { kind: 'deny', reason: 'approved grant response is incomplete' };
-          }
-          continuation = response.continue;
-          waitSeconds = continuation.wait ?? 0;
-        } catch (error) {
-          if (!(error instanceof GnapHttpError) || error.code !== 'too_fast') throw error;
-          waitSeconds = error.retryAfterSeconds ?? continuation.wait ?? 1;
-        }
+      // polling interval; a server that still paces it answers too_fast.
+      const continued = await this.#continueUntilDecided(client, pending.continue, input.signal, {
+        firstWaitSeconds: 0,
+        deadline: Number.POSITIVE_INFINITY,
+        maxAttempts: this.#maxContinuationAttempts,
+      });
+      if (continued.kind !== 'token') {
+        return continued.kind === 'timeout'
+          ? { kind: 'deny', reason: 'approved grant did not issue an access token' }
+          : continued;
       }
-      if (token === undefined) {
-        return { kind: 'deny', reason: 'approved grant did not issue an access token' };
-      }
-      const decision = this.#acceptIssued(input.sessionId, token);
+      const decision = this.#acceptIssued(input.sessionId, continued.token);
       issuedSuccessfully = true;
       return decision;
     } finally {
       if (!issuedSuccessfully && !input.signal.aborted) {
         // Best effort. An approved grant no longer accepts a deny transition,
         // so the server's grant expiry remains the final cleanup bound.
-        await this.#owner.resolve(grantId, 'deny', input.signal).catch(() => undefined);
+        await owner.resolve(grantId, 'deny', input.signal).catch(() => undefined);
       }
     }
+  }
+
+  /**
+   * Continue a pending grant until the server issues a token or refuses it,
+   * honouring `wait` and `too_fast`. Stops at `deadline` or after `maxAttempts`.
+   */
+  async #continueUntilDecided(
+    client: GrantClient,
+    first: NonNullable<GrantResponse['continue']>,
+    signal: AbortSignal,
+    limits: { firstWaitSeconds: number; deadline: number; maxAttempts: number },
+  ): Promise<
+    { kind: 'token'; token: AccessToken } | { kind: 'deny'; reason: string } | { kind: 'timeout' }
+  > {
+    let continuation = first;
+    let waitSeconds = limits.firstWaitSeconds;
+    for (let attempt = 0; attempt < limits.maxAttempts; attempt += 1) {
+      const waitMilliseconds = Math.min(
+        waitSeconds * 1000,
+        Math.max(0, limits.deadline - Date.now()),
+      );
+      if (waitMilliseconds > 0) await this.#sleep(waitMilliseconds, signal);
+      if (Date.now() > limits.deadline) return { kind: 'timeout' };
+      try {
+        const response = await client.continueGrant(
+          continuation.uri,
+          continuation.access_token.value,
+          signal,
+        );
+        if (response.access_token !== undefined)
+          return { kind: 'token', token: response.access_token };
+        if (response.continue === undefined) {
+          return { kind: 'deny', reason: 'grant response is incomplete' };
+        }
+        continuation = response.continue;
+        waitSeconds = continuation.wait ?? 0;
+      } catch (error) {
+        if (!(error instanceof GnapHttpError)) throw error;
+        if (error.code === 'too_fast') {
+          waitSeconds = error.retryAfterSeconds ?? continuation.wait ?? 1;
+          continue;
+        }
+        if (error.code === 'user_denied' || error.code === 'request_denied') {
+          return { kind: 'deny', reason: 'the owner denied the grant' };
+        }
+        if (error.code === 'invalid_continuation') {
+          return { kind: 'deny', reason: 'the grant expired before the owner decided' };
+        }
+        throw error;
+      }
+    }
+    return { kind: 'timeout' };
   }
 
   #acceptIssued(sessionId: string, token: AccessToken) {

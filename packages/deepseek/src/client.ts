@@ -49,13 +49,20 @@ export class GnapHttpClient implements GrantClient {
     this.#clock = options.clock;
   }
 
-  requestGrant(access: AgentOperationAccess[], signal?: AbortSignal): Promise<GrantResponse> {
+  requestGrant(
+    access: AgentOperationAccess[],
+    signal?: AbortSignal,
+    display?: { name: string },
+  ): Promise<GrantResponse> {
     return this.#json<GrantResponse>(
       this.issuer,
       'POST',
       {
         access_token: { access },
-        client: { key: { proof: 'httpsig', jwk: this.clientSigner.publicJwk } },
+        client: {
+          key: { proof: 'httpsig', jwk: this.clientSigner.publicJwk },
+          ...(display !== undefined ? { display } : {}),
+        },
       },
       this.clientSigner,
       undefined,
