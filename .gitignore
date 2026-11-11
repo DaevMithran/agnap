@@ -9,3 +9,6 @@ reports/
 
 # Local recoverable copies of superseded implementations.
 /archive/
+
+# DeepSeek Harness checkout used by packages/deepseek/harness-e2e/run.sh.
+/.harness/
