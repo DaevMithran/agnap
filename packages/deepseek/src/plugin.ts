@@ -4,6 +4,7 @@ import { parsePublicJwk } from '@agnap/gnap-core';
 import type { Ed25519PrivateJwk } from '@agnap/gnap-core';
 import { GnapToolAuthorizer } from './authorizer.js';
 import { InMemorySessionClientProvider } from './client.js';
+import { ExecutorClient } from './executor.js';
 import type { ApprovalPort, ToolProfile } from './types.js';
 
 export interface HarnessToolExecution {
@@ -30,6 +31,15 @@ export interface HarnessApprovalService {
   }): Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'>;
 }
 
+/** The Harness's normalized tool result (`ToolExecutionResult`), as far as this plugin builds one. */
+export type HarnessToolResult =
+  | { isError: false; value: unknown; content: { type: 'text'; text: string }[] }
+  | {
+      isError: true;
+      error: { message: string; info?: { name: string; code: string; reason?: string } };
+      content: { type: 'text'; text: string }[];
+    };
+
 export interface HarnessContext {
   on(
     event: 'tools/pre-execute',
@@ -37,6 +47,13 @@ export interface HarnessContext {
       execution: HarnessToolExecution,
       next: () => Promise<HarnessPreToolDecision>,
     ) => Promise<HarnessPreToolDecision>,
+  ): unknown;
+  on(
+    event: 'tools/execute',
+    listener: (
+      execution: HarnessToolExecution,
+      next: () => Promise<HarnessToolResult>,
+    ) => Promise<HarnessToolResult>,
   ): unknown;
   on(event: 'agent/disposed', listener: (payload: { agent: unknown }) => void): unknown;
   get(name: 'approval'): HarnessApprovalService | undefined;
@@ -61,14 +78,28 @@ export interface DeepSeekHarnessPluginOptions {
    * alone would leave tokens live until they expire. Defaults to 3000.
    */
   unloadRevokeTimeoutMs?: number;
+  /**
+   * Perform profiled tools through the AGNAP executor instead of their
+   * in-process bodies. The executor holds the credentials and enforces the
+   * grant, including grant ceilings; the tool body never runs.
+   */
+  executor?: ExecutorClient;
 }
 
 /** Serializable development configuration accepted by the Cordis `apply` export. */
 export interface Config {
   issuer: string;
-  resourceServerId: string;
-  /** Development-only: path to a private JWK file. Never place the key inline in config. */
-  resourceServerPrivateJwkFile: string;
+  /**
+   * The executor (`agnapd`) that performs profiled tools. With it, the
+   * plugin holds no resource-server key and leaves every check to the
+   * executor; `resourceServerId` and `resourceServerPrivateJwkFile` are then
+   * not used.
+   */
+  executorUrl?: string;
+  /** Without an executor: this plugin's id as a resource server, for introspection. */
+  resourceServerId?: string;
+  /** Without an executor. Development-only: path to a private JWK file; never inline the key. */
+  resourceServerPrivateJwkFile?: string;
   profiles: ToolProfile[];
   /**
    * How long a call that needs a new grant waits for the owner, who decides
@@ -134,16 +165,30 @@ export function agentLabelOf(agent: unknown): string | undefined {
 
 /** Conventional Cordis plugin entry point for the local PoC deployment. */
 export function apply(context: HarnessContext, config: Config): void {
-  const resourceServerSigner = Ed25519Signer.fromJwk(
-    loadPrivateJwk(config.resourceServerPrivateJwkFile),
-  );
+  const viaExecutor = config.executorUrl !== undefined;
+  let resourceServer;
+  if (!viaExecutor) {
+    if (
+      config.resourceServerId === undefined ||
+      config.resourceServerPrivateJwkFile === undefined
+    ) {
+      throw new Error(
+        'configure executorUrl, or resourceServerId and resourceServerPrivateJwkFile',
+      );
+    }
+    resourceServer = {
+      id: config.resourceServerId,
+      signer: Ed25519Signer.fromJwk(loadPrivateJwk(config.resourceServerPrivateJwkFile)),
+    };
+  }
   const clients = new InMemorySessionClientProvider({
     issuer: config.issuer,
-    resourceServer: { id: config.resourceServerId, signer: resourceServerSigner },
+    ...(resourceServer !== undefined ? { resourceServer } : {}),
   });
   const authorizer = new GnapToolAuthorizer({
     profiles: config.profiles,
     clients,
+    introspect: !viaExecutor,
     ...(config.ownerWaitSeconds !== undefined ? { ownerWaitSeconds: config.ownerWaitSeconds } : {}),
     ...(config.tokenTtlSeconds !== undefined ? { tokenTtlSeconds: config.tokenTtlSeconds } : {}),
   });
@@ -154,6 +199,9 @@ export function apply(context: HarnessContext, config: Config): void {
       ? { denyUnprofiledTools: config.denyUnprofiledTools }
       : {}),
     disposedSessionId: sessionIdFromAgent,
+    ...(config.executorUrl !== undefined
+      ? { executor: new ExecutorClient({ url: config.executorUrl }) }
+      : {}),
     ...(config.unloadRevokeTimeoutMs !== undefined
       ? { unloadRevokeTimeoutMs: config.unloadRevokeTimeoutMs }
       : {}),
@@ -244,4 +292,64 @@ export function applyDeepSeekHarnessPlugin(
     // Authorization never short-circuits other Harness policies.
     return next();
   });
+  const executor = options.executor;
+  if (executor !== undefined) {
+    context.on('tools/execute', async (execution, next) => {
+      if (execution.agent === undefined) return next();
+      const sessionId = options.sessionId(execution);
+      const covered = options.authorizer.coveredCall(
+        sessionId,
+        execution.name,
+        execution.arguments,
+      );
+      if (covered === 'unprofiled') return next();
+      if (covered === null) {
+        return toolFailure('no GNAP grant covers this call', 'AGNAP_NO_GRANT');
+      }
+      let outcome;
+      try {
+        outcome = await executor.call(
+          covered.token.value,
+          covered.signer,
+          covered.operation,
+          covered.arguments,
+          execution.signal,
+        );
+      } catch (error) {
+        if (execution.signal.aborted) throw error;
+        logError('AGNAP executor call failed', error);
+        return toolFailure(
+          'the executor could not be reached; the operation may or may not have run',
+          'AGNAP_EXECUTOR_UNREACHABLE',
+        );
+      }
+      switch (outcome.kind) {
+        case 'done':
+          return { isError: false, value: outcome.result, content: [] };
+        case 'refused':
+          if (outcome.code === 'invalid_token') {
+            options.authorizer.forget(sessionId, covered.fingerprint);
+          }
+          return toolFailure(
+            `refused by the grant: ${outcome.description}`,
+            `AGNAP_${outcome.code.toUpperCase()}`,
+          );
+        case 'failed':
+          return toolFailure(
+            outcome.effect === 'none'
+              ? `the operation failed and had no effect: ${outcome.description}`
+              : `the operation failed and may have had an effect: ${outcome.description}`,
+            'AGNAP_OPERATION_FAILED',
+          );
+      }
+    });
+  }
+}
+
+function toolFailure(message: string, code: string): HarnessToolResult {
+  return {
+    isError: true,
+    error: { message, info: { name: 'AgnapError', code } },
+    content: [{ type: 'text', text: `Error: ${message}` }],
+  };
 }

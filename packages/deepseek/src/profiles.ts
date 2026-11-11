@@ -17,6 +17,12 @@ export class ToolProfileRegistry {
       if (Object.keys(profile.arguments).length === 0) {
         throw new ToolProfileError(`profile ${profile.toolName} must declare arguments`);
       }
+      if (
+        profile.ceiling !== undefined &&
+        (!Number.isInteger(profile.ceiling.calls) || profile.ceiling.calls < 1)
+      ) {
+        throw new ToolProfileError(`profile ${profile.toolName}: ceiling.calls must be at least 1`);
+      }
       this.#profiles.set(profile.toolName, profile);
     }
   }
@@ -80,6 +86,9 @@ export function mapToolCall(profile: ToolProfile, input: unknown): MappedToolCal
   const access: AgentOperationAccess = {
     type: 'agent_operation',
     operations: { [operation]: constraints },
+    ...(profile.ceiling !== undefined
+      ? { ceilings: { [operation]: { calls: profile.ceiling.calls } } }
+      : {}),
   };
   const requiredAccess: AgentOperationAccess = {
     type: 'agent_operation',

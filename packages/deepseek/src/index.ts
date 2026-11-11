@@ -4,3 +4,4 @@ export * from './client.js';
 export * from './owner.js';
 export * from './authorizer.js';
 export * from './plugin.js';
+export * from './executor.js';

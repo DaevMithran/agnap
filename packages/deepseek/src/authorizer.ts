@@ -1,6 +1,6 @@
 import { coversAny } from '@agnap/access-types';
-import type { AgentOperationAccess } from '@agnap/access-types';
-import type { AccessToken, GrantResponse } from '@agnap/gnap-core';
+import type { AgentOperationAccess, Scalar } from '@agnap/access-types';
+import type { AccessToken, GrantResponse, Signer } from '@agnap/gnap-core';
 import { GnapHttpError, tokenFingerprint } from './client.js';
 import { mapToolCall, ToolProfileError, ToolProfileRegistry } from './profiles.js';
 import type {
@@ -60,6 +60,23 @@ export interface GnapToolAuthorizerOptions {
   tokenTtlSeconds?: number;
   /** Bounds malformed or perpetually pending servers. Defaults to 20 polls. */
   maxContinuationAttempts?: number;
+  /**
+   * Introspect a stored grant before reusing it, to notice revocation.
+   * Defaults to true. Set it to false when an executor performs the calls:
+   * the executor introspects every call, and the plugin then needs no
+   * resource-server key.
+   */
+  introspect?: boolean;
+}
+
+/** The stored grant that covers one tool call, and the call as the executor sees it. */
+export interface CoveredCall {
+  token: AccessToken;
+  /** The session's client key, which the token is bound to. */
+  signer: Signer;
+  fingerprint: string;
+  operation: string;
+  arguments: Record<string, Scalar>;
 }
 
 const defaultSleep = (milliseconds: number, signal: AbortSignal): Promise<void> =>
@@ -106,6 +123,7 @@ export class GnapToolAuthorizer {
   readonly #sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   readonly #tokenTtlSeconds: number;
   readonly #maxContinuationAttempts: number;
+  readonly #introspect: boolean;
   readonly #tails = new Map<string, Promise<void>>();
 
   constructor(options: GnapToolAuthorizerOptions) {
@@ -117,6 +135,7 @@ export class GnapToolAuthorizer {
     this.#tokenTtlSeconds = options.tokenTtlSeconds ?? 600;
     this.#maxContinuationAttempts = options.maxContinuationAttempts ?? 20;
     this.#ownerWaitSeconds = options.ownerWaitSeconds ?? 300;
+    this.#introspect = options.introspect ?? true;
     if (!Number.isInteger(this.#ownerWaitSeconds) || this.#ownerWaitSeconds <= 0) {
       throw new RangeError('ownerWaitSeconds must be a positive integer');
     }
@@ -142,6 +161,45 @@ export class GnapToolAuthorizer {
       if (input.signal.aborted) return { kind: 'cancel' };
       throw error;
     }
+  }
+
+  /**
+   * Find the stored grant that covers a tool call, after `authorize` allowed
+   * it. Only the grant's own access is consulted; the executor checks it
+   * again with the grant server.
+   * @returns the grant and the mapped call, `null` when no stored grant
+   * covers it, or `unprofiled`.
+   */
+  coveredCall(
+    sessionId: string,
+    toolName: string,
+    args: unknown,
+  ): CoveredCall | null | 'unprofiled' {
+    const profile = this.#profiles.get(toolName);
+    if (profile === null) return 'unprofiled';
+    let call;
+    try {
+      call = mapToolCall(profile, args);
+    } catch {
+      return null;
+    }
+    for (const existing of this.#grants.list(sessionId)) {
+      if (coversAny(existing.token.access, call.operation, call.arguments).allow) {
+        return {
+          token: existing.token,
+          signer: this.#clients.get(sessionId).clientSigner,
+          fingerprint: existing.fingerprint,
+          operation: call.operation,
+          arguments: call.arguments,
+        };
+      }
+    }
+    return null;
+  }
+
+  /** Drop a stored grant the executor reported as no longer active. */
+  forget(sessionId: string, fingerprint: string): void {
+    this.#grants.delete(sessionId, fingerprint);
   }
 
   async revoke(sessionId: string, signal?: AbortSignal): Promise<void> {
@@ -209,11 +267,10 @@ export class GnapToolAuthorizer {
     for (const existing of this.#grants.list(input.sessionId)) {
       const localDecision = coversAny(existing.token.access, call.operation, call.arguments);
       if (!localDecision.allow) continue;
-      const introspection = await client.introspect(
-        existing.token.value,
-        [call.requiredAccess],
-        input.signal,
-      );
+      if (!this.#introspect) return { kind: 'allow', fingerprint: existing.fingerprint };
+      // Coverage is checked here, not by the server: a requested access
+      // without the grant's ceilings is not contained in it.
+      const introspection = await client.introspect(existing.token.value, undefined, input.signal);
       if (!introspection.active) {
         this.#grants.delete(input.sessionId, existing.fingerprint);
       } else {

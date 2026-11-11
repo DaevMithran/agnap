@@ -37,7 +37,7 @@ export class GnapHttpError extends Error {
 export class GnapHttpClient implements GrantClient {
   readonly issuer: string;
   readonly clientSigner: GnapClientOptions['clientSigner'];
-  readonly resourceServer: ResourceServerIdentity;
+  readonly resourceServer: ResourceServerIdentity | undefined;
   readonly #fetch: Fetch;
   readonly #clock: GnapClientOptions['clock'];
 
@@ -90,6 +90,9 @@ export class GnapHttpClient implements GrantClient {
     access?: AgentOperationAccess[],
     signal?: AbortSignal,
   ): Promise<IntrospectionResponse> {
+    if (this.resourceServer === undefined) {
+      return Promise.reject(new Error('introspection needs a resource-server identity'));
+    }
     return this.#json<IntrospectionResponse>(
       new URL('introspect', this.issuer).toString(),
       'POST',
@@ -163,7 +166,7 @@ export class GnapHttpClient implements GrantClient {
 
 export interface InMemorySessionClientProviderOptions {
   issuer: string;
-  resourceServer: ResourceServerIdentity;
+  resourceServer?: ResourceServerIdentity;
   fetch?: Fetch;
   clock?: GnapClientOptions['clock'];
 }
@@ -182,7 +185,9 @@ export class InMemorySessionClientProvider implements SessionClientProvider {
     const client = new GnapHttpClient({
       issuer: this.#options.issuer,
       clientSigner: Ed25519Signer.generate(`client-${randomToken(8)}`),
-      resourceServer: this.#options.resourceServer,
+      ...(this.#options.resourceServer !== undefined
+        ? { resourceServer: this.#options.resourceServer }
+        : {}),
       ...(this.#options.fetch !== undefined ? { fetch: this.#options.fetch } : {}),
       ...(this.#options.clock !== undefined ? { clock: this.#options.clock } : {}),
     });

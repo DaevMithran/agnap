@@ -5,8 +5,10 @@
  * plugin mounted through its Cordis entry point; the real gnap-server over
  * loopback HTTP; and a scripted owner using @agnap/owner, whose every
  * decision is signed with the owner key. The plugin holds no owner
- * credential. The tools are fakes that record whether they ran: there is no
- * executor yet, so this covers the in-process gate, not credential isolation.
+ * credential. The first suite gates in-process fake tools. The second
+ * routes them through the real executor (agnapd) to a loopback API: the
+ * executor holds the API credential and counts calls, and the fake tool
+ * bodies must never run.
  *
  * Run with ./run.sh, which places this file in the Harness tree at
  * packages/test-support/agent-loop-testkit/tests/ and sets AGNAP_ROOT.
@@ -20,7 +22,9 @@ import { Context } from '@deepseek-ai/cordis';
 import AgentLoop from '@deepseek-ai/dsh-agent-loop';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session';
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools';
+import { defineContentToolFixture, defineTool } from '@deepseek-ai/dsh-tools';
+import { createServer as createHttpServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { mountAgentLoopTestDependencies } from '../src/index.ts';
 import ApprovalService from '../../../interaction/user-approval/src/index.ts';
@@ -44,6 +48,9 @@ const {
 const { agentOperationHandler } = await import(`${root}/packages/access-types/dist/index.js`);
 const { Ed25519Signer, parsePublicJwk } = await import(`${root}/packages/gnap-core/dist/index.js`);
 const { OwnerClient, watch } = await import(`${root}/packages/owner/dist/index.js`);
+const { createExecutor, GnapIntrospector, HttpConnector, SqliteGrantStateStore } = await import(
+  `${root}/packages/executor/dist/index.js`
+);
 
 /** Polling interval the server hands out; the plugin waits this long between continuations. */
 const CONTINUE_WAIT_SECONDS = 1;
@@ -75,8 +82,10 @@ async function startAs() {
   const kid = 'deepseek-harness-rs';
   const privateJwk = { kid, alg: 'EdDSA', ...privateKey.export({ format: 'jwk' }) };
   const publicJwk = { kid, alg: 'EdDSA', ...publicKey.export({ format: 'jwk' }) };
+  const executorSigner = Ed25519Signer.generate('agnapd');
   const rsRegistry = new StaticResourceServerRegistry([
     { id: 'deepseek-harness', key: parsePublicJwk(publicJwk), accessTypes: ['agent_operation'] },
+    { id: 'agnapd', key: executorSigner.publicJwk, accessTypes: ['agent_operation'] },
   ]);
   const ownerSigner = Ed25519Signer.generate('agnap-owner');
   const store = new MemoryStore();
@@ -113,7 +122,7 @@ async function startAs() {
   const dir = mkdtempSync(join(tmpdir(), 'agnap-'));
   const keyFile = join(dir, 'rs.jwk');
   writeFileSync(keyFile, JSON.stringify(privateJwk));
-  return { issuer, keyFile, log, ownerSigner };
+  return { issuer, keyFile, log, ownerSigner, executorSigner };
 }
 
 /** The owner, in its own loop: answers each pending grant from `answers`, signed with the owner key. */
@@ -403,5 +412,185 @@ describe('AGNAP plugin in the real DeepSeek Harness', { timeout: 30_000 }, () =>
     expect(h.harnessPrompts()).toBe(0);
     await child.dispose();
     await parent.dispose();
+  });
+});
+
+const API_SECRET = 'api-secret-only-agnapd-knows';
+
+/** A loopback stand-in for the downstream API; records every request it receives. */
+async function startApi() {
+  const received: { method: string; url: string; auth: string | undefined; body: string }[] = [];
+  const server = createHttpServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk: Buffer) => (body += chunk.toString()));
+    req.on('end', () => {
+      received.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, body });
+      res.writeHead(201, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: received.length }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  closers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, received };
+}
+
+async function startExecutor(issuer: string, executorSigner: unknown, apiUrl: string) {
+  const handler = createExecutor({
+    introspector: new GnapIntrospector({
+      issuer,
+      resourceServerId: 'agnapd',
+      signer: executorSigner,
+    }),
+    connectors: [
+      new HttpConnector({
+        baseUrl: apiUrl,
+        credential: { header: 'authorization', value: () => `Bearer ${API_SECRET}` },
+        operations: {
+          'github.comment.create': {
+            method: 'POST',
+            path: '/repos/{+repository}/issues/{issue}/comments',
+            body: ['body'],
+          },
+        },
+      }),
+    ],
+    grantState: new SqliteGrantStateStore(
+      join(mkdtempSync(join(tmpdir(), 'agnapd-')), 'grant-state.db'),
+    ),
+  });
+  const running = await serve(handler, { port: 0 });
+  closers.push(() => running.close());
+  return running.url as string;
+}
+
+const commentProfile = {
+  toolName: 'comment',
+  operation: 'github.comment.create',
+  arguments: {
+    repository: { authority: 'identity' },
+    issue: { authority: 'identity' },
+    body: { authority: 'free' },
+  },
+  ceiling: { calls: 3 },
+};
+
+/** One model step that asks for several tool calls at once. */
+function parallelCalls(calls: { id: string; name: string; args: object }[]) {
+  const chunks: unknown[] = [];
+  calls.forEach((call, index) => {
+    const one = toolCallResponse(call.id, call.name, call.args) as { type: string }[];
+    for (const chunk of one) {
+      if (chunk.type === 'usage' || chunk.type === 'finish') continue;
+      chunks.push({ ...chunk, index });
+    }
+  });
+  chunks.push(
+    { type: 'usage', usage: { inputTokens: 10, outputTokens: 5 } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  );
+  return chunks;
+}
+
+async function harnessWithExecutor(script: unknown[], answers: ('approve' | 'deny')[]) {
+  const as = await startAs();
+  const api = await startApi();
+  const executorUrl = await startExecutor(as.issuer, as.executorSigner, api.url);
+  const owner = startOwner(as.issuer, as.ownerSigner, answers);
+  const ctx = new Context();
+  contexts.push(ctx);
+  await mountAgentLoopTestDependencies(ctx);
+  await ctx.plugin(AgentLoop, { agents: [] });
+  // No resource-server key: only the executor introspects.
+  await ctx.plugin(AgnapDeepseek, {
+    issuer: as.issuer,
+    executorUrl,
+    profiles: [commentProfile],
+    denyUnprofiledTools: true,
+    ownerWaitSeconds: 10,
+  });
+  let bodyRuns = 0;
+  ctx.tools.register(
+    defineTool({
+      name: 'comment',
+      description: 'Comment on an issue',
+      parameters: {
+        repository: { type: 'string' },
+        issue: { type: 'number' },
+        body: { type: 'string' },
+      },
+      output: {
+        schema: { type: 'json' },
+        render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],
+      },
+      isConcurrencySafe: () => true,
+      async execute() {
+        bodyRuns += 1;
+        return { id: -1 };
+      },
+    } as never),
+  );
+  ctx.llm.registerAdapter(['mock'], new MockAdapter(script as never));
+  return { ctx, as, api, owner, bodyRuns: () => bodyRuns };
+}
+
+describe('AGNAP plugin with the executor in the real DeepSeek Harness', { timeout: 30_000 }, () => {
+  it('the executor performs the call with a credential the Harness never sees', async () => {
+    const h = await harnessWithExecutor(
+      [
+        toolCallResponse('c1', 'comment', { repository: 'acme/docs', issue: 7, body: 'hello' }),
+        textResponse('done'),
+      ],
+      ['approve'],
+    );
+    const { agent } = await rootAgent(h.ctx, 'x1');
+    expect(toolResults(agent)[0]).toEqual({ isError: false, text: '{"id":1}' });
+    expect(h.api.received).toEqual([
+      {
+        method: 'POST',
+        url: '/repos/acme/docs/issues/7/comments',
+        auth: `Bearer ${API_SECRET}`,
+        body: '{"body":"hello"}',
+      },
+    ]);
+    expect(h.bodyRuns()).toBe(0);
+    expect(JSON.stringify(events(agent))).not.toContain(API_SECRET);
+  });
+
+  it('the ceiling in the grant state record holds when the model asks for many calls at once', async () => {
+    const calls = Array.from({ length: 6 }, (_, i) => ({
+      id: `p${i}`,
+      name: 'comment',
+      args: { repository: 'acme/docs', issue: 7, body: `comment ${i}` },
+    }));
+    const h = await harnessWithExecutor(
+      [
+        toolCallResponse('c0', 'comment', { repository: 'acme/docs', issue: 7, body: 'first' }),
+        parallelCalls(calls),
+        textResponse('done'),
+      ],
+      ['approve'],
+    );
+    const { agent } = await rootAgent(h.ctx, 'x2');
+    const results = toolResults(agent);
+    expect(results).toHaveLength(7);
+    expect(results.filter((r) => !r.isError)).toHaveLength(3);
+    expect(results.filter((r) => r.text.includes('3 calls allowed'))).toHaveLength(4);
+    expect(h.api.received).toHaveLength(3);
+    expect(h.owner).toHaveLength(1);
+    expect(h.bodyRuns()).toBe(0);
+  });
+
+  it('a call outside the grant asks the owner; on deny nothing reaches the API', async () => {
+    const h = await harnessWithExecutor(
+      [
+        toolCallResponse('c1', 'comment', { repository: 'acme/docs', issue: 7, body: 'ok' }),
+        toolCallResponse('c2', 'comment', { repository: 'acme/secrets', issue: 1, body: 'leak' }),
+        textResponse('done'),
+      ],
+      ['approve', 'deny'],
+    );
+    const { agent } = await rootAgent(h.ctx, 'x3');
+    expect(toolResults(agent).map((r) => r.isError)).toEqual([false, true]);
+    expect(h.api.received.map((r) => r.url)).toEqual(['/repos/acme/docs/issues/7/comments']);
   });
 });

@@ -3,6 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { ToolProfileError, ToolProfileRegistry, mapToolCall } from '../src/index.js';
 
 describe('tool profiles', () => {
+  it("asks for the profile's grant ceiling on the requested access only", () => {
+    const profile = {
+      toolName: 'comment',
+      operation: 'github.comment.create',
+      arguments: { repository: {}, body: { authority: 'free' as const } },
+      ceiling: { calls: 3 },
+    };
+    const mapped = mapToolCall(profile, { repository: 'acme/docs', body: 'hi' });
+    expect(mapped.access.ceilings).toEqual({ 'github.comment.create': { calls: 3 } });
+    expect(mapped.requiredAccess.ceilings).toBeUndefined();
+    expect(() => new ToolProfileRegistry([{ ...profile, ceiling: { calls: 0 } }])).toThrow(
+      ToolProfileError,
+    );
+  });
+
   it('maps identity arguments to exact constraints and free arguments to wildcards', () => {
     const mapped = mapToolCall(
       {

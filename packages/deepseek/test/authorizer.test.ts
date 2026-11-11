@@ -293,7 +293,7 @@ describe('GNAP tool authorizer', () => {
     expect(prompts).toBe(1);
   });
 
-  it('introspects narrowed grants with exact access required by the current call', async () => {
+  it('introspects a stored grant without requested access and checks coverage itself', async () => {
     const grants = new MemorySessionGrantStore();
     const narrowedAccess = {
       type: 'agent_operation' as const,
@@ -344,7 +344,26 @@ describe('GNAP tool authorizer', () => {
         request: () => Promise.reject(new Error('not expected')),
       }),
     ).toEqual({ kind: 'allow', fingerprint: 'narrowed' });
-    expect(introspectedAccess).toEqual([narrowedAccess]);
+    // A requested access without the grant's ceilings is not contained in
+    // it, so the server is asked only whether the token is active.
+    expect(introspectedAccess).toBeUndefined();
+    expect(
+      authorizer.coveredCall('session-1', 'github.pull_request.create', {
+        repository: 'acme/app',
+        title: 'Fix login',
+      }),
+    ).toMatchObject({
+      fingerprint: 'narrowed',
+      operation: 'github.pull_request.create',
+      arguments: { repository: 'acme/app', title: 'Fix login' },
+    });
+    expect(
+      authorizer.coveredCall('session-1', 'github.pull_request.create', {
+        repository: 'acme/app',
+        title: 'Other',
+      }),
+    ).toBeNull();
+    expect(authorizer.coveredCall('session-1', 'shell', {})).toBe('unprofiled');
   });
 
   it('denies rejected approval, fails closed on bad arguments, and ignores unprofiled tools', async () => {

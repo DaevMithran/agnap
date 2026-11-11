@@ -8,7 +8,8 @@ It uses the Harness's own agent loop, tool registry and approval service, a
 scripted model, the plugin loaded through its Cordis entry point, `gnap-server`
 over loopback HTTP, and a scripted owner built on `@agnap/owner` whose
 decisions are signed with the owner key. The tools are fakes that record
-whether they ran.
+whether they ran. A second suite routes the tool through the real executor
+(`agnapd`, SQLite grant state store) to a loopback API.
 
 ```sh
 packages/deepseek/harness-e2e/run.sh
@@ -32,11 +33,18 @@ packages.
 - The owner sees a subagent named with its parent; each child has its own key.
 - A delegated child, whose approval policy the Harness pins to `never`, can be
   granted access by the owner.
+- With the executor: the call reaches the API with the executor's credential,
+  which never appears in the session log; the fake tool body never runs.
+- With the executor: the grant state record holds a ceiling of 3 when the model asks for six calls
+  in one step, and four calls are refused with the ceiling.
+- With the executor: a call outside the grant asks the owner, and a denial
+  sends nothing to the API.
 
 ## What it does not cover
 
-- Credential isolation or enforcement outside the agent's process: there is
-  no executor yet.
+- Process isolation: the executor runs in the test process here, so the test
+  shows the credential stays out of the Harness's data, not out of its memory.
+  A deployment runs `agnapd` as a separate user.
 - PTC mode, where native tools are called from inside `run_code`.
 - Child grants derived from the parent's grant. A child's grant is still a
   separate owner decision.

@@ -1,7 +1,7 @@
 # `@agnap/deepseek`
 
-DeepSeek Harness `tools/pre-execute` authorization backed by key-bound GNAP
-grants.
+DeepSeek Harness tool authorization backed by key-bound GNAP grants, with
+protected tools performed by the AGNAP executor.
 
 This package is the DeepSeek Harness adapter. Generic GNAP messages, signing,
 access-type registration, grant lifecycle, and owner-side narrowing belong to
@@ -58,12 +58,48 @@ Calls outside an existing grant request a new grant and ask the owner again;
 they are not hard-denied merely because another grant covers the same
 operation.
 
-The plugin and protected tool dispatcher currently share one process. There is
-therefore no resource-request signature to verify at tool-use time. The AS
-binds continuation and management operations to the client key, and RFC 9767
-introspection returns the bound key, but this demo does not prove possession of
-that key for each in-process tool call. It sends the current call's access in
-the introspection request so the AS evaluates the requested-access rule.
+## Through the executor
+
+With `executorUrl` set, profiled tools are performed by
+[`agnapd`](../executor/README.md) instead of their in-process bodies, which
+never run. The plugin's `tools/execute` listener sends the mapped operation
+to the executor, carrying the grant's token and signed with the session's
+client key. The executor introspects the token, verifies the signature
+against the bound key, checks the grant covers the call, counts it against
+the grant state record, and calls the downstream API with a credential only
+it holds. The result goes back to the model as the tool's value; a refusal
+(`ceiling_reached`, `insufficient_access`, …) or a downstream failure becomes
+the tool error.
+
+In this mode the plugin holds no resource-server key: `resourceServerId` and
+`resourceServerPrivateJwkFile` are not needed, and the plugin does not
+introspect. A token the executor reports as inactive is dropped, so the next
+call requests a new grant.
+
+A profile may ask for a ceiling, recorded in the grant state record, which the owner sees on the grant card
+and the executor enforces across tokens and parallel calls:
+
+```yaml
+- toolName: comment
+  operation: github.comment.create
+  arguments:
+    repository: {}
+    issue: {}
+    body: { authority: free }
+  ceiling: { calls: 3 }
+```
+
+## Without the executor
+
+The plugin and the tool body then share one process. There is no
+resource-request signature to verify at tool-use time: the AS binds
+continuation and management operations to the client key, and RFC 9767
+introspection returns the bound key, but the plugin does not prove possession
+of that key for each in-process call. It introspects a stored grant before
+reusing it, to notice revocation, and checks coverage itself. Ceilings are
+not enforced in this mode.
+
+## Lifecycle
 
 Unprofiled tools delegate to later Harness policies by default. Set
 `denyUnprofiledTools` to make the adapter deny them instead.

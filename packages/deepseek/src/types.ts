@@ -17,7 +17,11 @@ export interface ResourceServerIdentity {
 export interface GnapClientOptions {
   issuer: string;
   clientSigner: Signer;
-  resourceServer: ResourceServerIdentity;
+  /**
+   * Needed only to introspect. Leave it out when an executor checks tokens:
+   * the agent's process then holds no resource-server key.
+   */
+  resourceServer?: ResourceServerIdentity;
   fetch?: Fetch;
   clock?: Clock;
 }
@@ -104,6 +108,12 @@ export interface ToolProfile {
   arguments: Record<string, ArgumentRule>;
   /** Defaults to true. */
   rejectUnknownArguments?: boolean;
+  /**
+   * Ask for a ceiling on this operation, checked against the grant state record. The executor enforces it
+   * against one grant state record per root grant, so it holds across tokens and
+   * parallel calls.
+   */
+  ceiling?: { calls: number };
 }
 
 export interface MappedToolCall {
