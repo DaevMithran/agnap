@@ -1,0 +1,34 @@
+{
+  "name": "agnap",
+  "private": true,
+  "description": "GNAP-based grant-mediated execution boundary for AI agents",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "generate": "pnpm --filter @agnap/specs generate",
+    "generate:check": "pnpm --filter @agnap/specs generate:check",
+    "build": "pnpm -r --filter './packages/**' run build",
+    "clean": "pnpm -r --filter './packages/**' run clean",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -b tsconfig.build.json --dry",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "lint:specs": "pnpm --filter @agnap/specs run lint",
+    "gnap-server": "tsx --conditions=development packages/gnap-server/src/cli.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.10.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^4.1.11"
+  }
+}

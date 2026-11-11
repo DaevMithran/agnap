@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/gnap-core"
+    },
+    {
+      "path": "packages/access-types"
+    },
+    {
+      "path": "packages/gnap-server"
+    },
+    {
+      "path": "packages/deepseek"
+    }
+  ]
+}

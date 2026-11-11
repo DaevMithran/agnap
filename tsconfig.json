@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@agnap/gnap-core": ["packages/gnap-core/src/index.ts"],
+      "@agnap/access-types": ["packages/access-types/src/index.ts"],
+      "@agnap/access-types/*": ["packages/access-types/src/*.ts"],
+      "@agnap/gnap-server": ["packages/gnap-server/src/index.ts"],
+      "@agnap/deepseek": ["packages/deepseek/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "vitest.config.ts"]
+}

@@ -6,3 +6,6 @@ reports/
 *.log
 .env
 .env.*
+
+# Local recoverable copies of superseded implementations.
+/archive/
