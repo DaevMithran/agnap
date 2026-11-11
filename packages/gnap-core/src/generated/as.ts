@@ -222,6 +222,8 @@ export interface components {
           iss: string;
           exp?: number;
           iat?: number;
+          /** @description AGNAP extension. Opaque reference to the root grant this token descends from. The grant state record is kept per root grant, so every token issued under it counts against the same ceilings. */
+          root_grant?: string;
         };
     ErrorResponse: {
       error: {

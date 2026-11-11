@@ -5,15 +5,33 @@
   "description": "The shipped agent_operation GNAP access object.",
   "type": "object",
   "properties": {
-    "type": { "const": "agent_operation" },
+    "type": {
+      "const": "agent_operation"
+    },
     "operations": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": { "pattern": "^[A-Za-z0-9_.:/-]{1,200}$" },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_.:/-]{1,200}$"
+      },
       "additionalProperties": {
         "type": "object",
-        "propertyNames": { "pattern": "^[A-Za-z0-9_.-]{1,100}$" },
-        "additionalProperties": { "$ref": "#/$defs/Constraint" }
+        "propertyNames": {
+          "pattern": "^[A-Za-z0-9_.-]{1,100}$"
+        },
+        "additionalProperties": {
+          "$ref": "#/$defs/Constraint"
+        }
+      }
+    },
+    "ceilings": {
+      "type": "object",
+      "description": "Call ceilings per operation, as in authority.json `Ceilings`. The executor checks them against the grant state record of the root grant. Every key must name an operation in `operations`.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_.:/-]{1,200}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/CallCeiling"
       }
     }
   },
@@ -26,7 +44,9 @@
     "ExactConstraint": {
       "type": "object",
       "properties": {
-        "exact": { "$ref": "#/$defs/Scalar" }
+        "exact": {
+          "$ref": "#/$defs/Scalar"
+        }
       },
       "required": ["exact"],
       "additionalProperties": false
@@ -34,13 +54,35 @@
     "WildcardConstraint": {
       "type": "object",
       "properties": {
-        "wildcard": { "const": true }
+        "wildcard": {
+          "const": true
+        }
       },
       "required": ["wildcard"],
       "additionalProperties": false
     },
     "Constraint": {
-      "oneOf": [{ "$ref": "#/$defs/ExactConstraint" }, { "$ref": "#/$defs/WildcardConstraint" }]
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ExactConstraint"
+        },
+        {
+          "$ref": "#/$defs/WildcardConstraint"
+        }
+      ]
+    },
+    "CallCeiling": {
+      "title": "CallCeiling",
+      "description": "The operation may be invoked at most `calls` times under this grant and everything derived from it. Same as `CallCeiling` in authority.json.",
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": ["calls"],
+      "additionalProperties": false
     }
   }
 }

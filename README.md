@@ -12,8 +12,11 @@ execution boundary.
 GNAP is the first authority protocol used by the project. The architecture also
 proposes a local authority provider and considers AAuth and OAuth-based alternatives.
 
-**Status:** proposal and specification under development. This README describes
-the intended architecture and its security requirements.
+**Status:** proposal and specification under development, with a working
+proof of concept: a GNAP authorization server, the owner CLI
+(`agnap-owner`), the executor (`agnapd`) with the grant state record, and a
+DeepSeek Harness plugin. Child grants are not built yet. This README
+describes the intended architecture and its security requirements.
 
 ## The problem
 
@@ -97,15 +100,15 @@ An effective authorization decision combines four things:
    presenting the request, and which executor it is authorized to use.
 2. **Granted authority:** the approved operations, argument constraints,
    validity window and any ceiling definitions for that instance.
-3. **Grant state:** expiry and revocation, plus ancestor state and shared usage
-   across a delegation tree.
+3. **Grant state record:** expiry and revocation, plus ancestor state and the
+   calls counted against the grant's ceilings across a delegation tree.
 4. **Execution authority:** executor policy and the downstream credential's
    own permissions.
 
 With GNAP, the agent carries a key-bound token containing or referencing the
 granted authority. With the local provider, the broker retrieves a protected
 permission record associated with the session. The agent cannot edit either
-form of authority. Revocation and usage state remain on the trusted side.
+form of authority. Revocation and the grant state record remain on the trusted side.
 
 ### Operation permissions
 
@@ -129,8 +132,9 @@ are denied. Required fields and types are validated against the tool schema;
 the permission checker does not replace that schema.
 
 Each constraint type defines validation and containment: whether one permission
-description is no wider than another. Shared spending or call limits require
-mutable state and atomic reservations.
+description is no wider than another. Ceilings on calls or spending are
+checked against the grant state record, which needs mutable state and atomic
+reservations.
 
 ## Why GNAP, and where other providers fit
 
@@ -175,20 +179,20 @@ sequenceDiagram
     Child->>AGNAP: Request child grant with caller binding and lineage evidence
     AGNAP->>AGNAP: Verify lineage and caller binding
     AGNAP->>AGNAP: Check requested authority fits the parent grant
-    AGNAP->>State: Check root grant, lineage and shared limits
-    State-->>AGNAP: Return current grant and usage state
+    AGNAP->>State: Check root grant, lineage and ceilings
+    State-->>AGNAP: Return current grant state
     AGNAP-->>Child: Issue child authority linked to root state
     Note over State,Child: Children share the root allowance when they act
 ```
 
 The owner can permit automatic approval of contained child requests or require
-approval for each one. Both modes enforce containment, depth and shared limits.
+approval for each one. Both modes enforce containment, depth and the root grant's ceilings.
 A child wider than its parent is denied. If more authority is needed, the
 system must obtain a new owner decision through an explicit root-authority
 change; it cannot place wider authority beneath an unchanged, narrower parent.
 
-Children reference one root usage record rather than receiving copies of a
-spending or call allowance. The executor reserves allowance atomically before
+Children reference the root's grant state record rather than receiving copies
+of a spending or call allowance. The executor reserves allowance atomically before
 an effect, then records confirmed use or releases it after confirmed failure.
 An unknown outcome keeps the reservation until reconciliation. Retries require
 service-specific idempotency or reconciliation; a timeout is not proof that an

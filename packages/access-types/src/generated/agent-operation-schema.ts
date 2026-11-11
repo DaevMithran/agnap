@@ -25,6 +25,17 @@ export const agentOperationSchema = {
         },
       },
     },
+    ceilings: {
+      type: 'object',
+      description:
+        'Call ceilings per operation, as in authority.json `Ceilings`. The executor checks them against the grant state record of the root grant. Every key must name an operation in `operations`.',
+      propertyNames: {
+        pattern: '^[A-Za-z0-9_.:/-]{1,200}$',
+      },
+      additionalProperties: {
+        $ref: '#/$defs/CallCeiling',
+      },
+    },
   },
   required: ['type', 'operations'],
   additionalProperties: false,
@@ -61,6 +72,20 @@ export const agentOperationSchema = {
           $ref: '#/$defs/WildcardConstraint',
         },
       ],
+    },
+    CallCeiling: {
+      title: 'CallCeiling',
+      description:
+        'The operation may be invoked at most `calls` times under this grant and everything derived from it. Same as `CallCeiling` in authority.json.',
+      type: 'object',
+      properties: {
+        calls: {
+          type: 'integer',
+          minimum: 1,
+        },
+      },
+      required: ['calls'],
+      additionalProperties: false,
     },
   },
 };

@@ -32,3 +32,38 @@ describe('contains', () => {
     expect(contains(wider, p({ 'shell.exec': { argv: { exact: 'git push' } } }))).toBe(false);
   });
 });
+
+describe('contains with grant ceilings', () => {
+  const op = { 'comment.create': { repository: { exact: 'acme/docs' } } };
+  const capped = (calls?: number) =>
+    parseAgentOperation({
+      type: 'agent_operation',
+      operations: op,
+      ...(calls !== undefined ? { ceilings: { 'comment.create': { calls } } } : {}),
+    });
+
+  it('keeping or lowering a ceiling narrows; dropping or raising it widens; adding one narrows', () => {
+    expect(contains(capped(3), capped(3))).toBe(true);
+    expect(contains(capped(3), capped(1))).toBe(true);
+    expect(contains(capped(3), capped(4))).toBe(false);
+    expect(contains(capped(3), capped())).toBe(false);
+    expect(contains(capped(), capped(2))).toBe(true);
+  });
+
+  it('a ceiling must name an operation of the item', () => {
+    expect(() =>
+      parseAgentOperation({
+        type: 'agent_operation',
+        operations: op,
+        ceilings: { 'issue.close': { calls: 1 } },
+      }),
+    ).toThrow(/not an operation/);
+    expect(() =>
+      parseAgentOperation({
+        type: 'agent_operation',
+        operations: op,
+        ceilings: { 'comment.create': { calls: 0 } },
+      }),
+    ).toThrow();
+  });
+});

@@ -295,6 +295,8 @@ export function createServer(config: ServerConfig, store: Store): GnapServer {
           iss: config.issuer,
           exp: Math.floor(token.expiresAt / 1000),
           iat: Math.floor(token.issuedAt / 1000),
+          // Until child grants exist every grant is its own root.
+          root_grant: token.grantId,
         },
       };
     },

@@ -6,7 +6,12 @@
  * constraint is denied.
  *
  *   { "type": "agent_operation",
- *     "operations": { "github.pull_request.create": { "repository": { "exact": "acme/app" } } } }
+ *     "operations": { "github.pull_request.create": { "repository": { "exact": "acme/app" } } },
+ *     "ceilings": { "github.pull_request.create": { "calls": 3 } } }
+ *
+ * `ceilings` is optional. A grant ceiling caps how many times the operation may
+ * run across the whole grant; the executor counts against one grant state record
+ * per root grant, so every token and every child of that grant shares it.
  */
 import { AccessParseError, createAjv } from '@agnap/gnap-core';
 import type { AccessItem, AccessTypeHandler } from '@agnap/gnap-core';
@@ -37,15 +42,37 @@ const ajv = createAjv();
 export const validateAgentOperation = ajv.compile<AgentOperationAccess>(agentOperationSchema);
 
 export function parseAgentOperation(value: unknown): AgentOperationAccess {
-  if (validateAgentOperation(value)) return value;
-  throw new AccessParseError(AGENT_OPERATION, diagnoseAgentOperation(value));
+  if (!validateAgentOperation(value)) {
+    throw new AccessParseError(AGENT_OPERATION, diagnoseAgentOperation(value));
+  }
+  for (const operation of Object.keys(value.ceilings ?? {})) {
+    if (value.operations[operation] === undefined) {
+      throw new AccessParseError(
+        AGENT_OPERATION,
+        `ceilings.${operation}: not an operation of this access item`,
+      );
+    }
+  }
+  return value;
+}
+
+/**
+ * The grant ceiling on `operation` in this item, if any.
+ * @param access - a parsed access item.
+ * @param operation - the operation name.
+ * @returns the most calls allowed, or `undefined` when uncounted.
+ */
+export function callCeiling(access: AgentOperationAccess, operation: string): number | undefined {
+  return access.ceilings?.[operation]?.calls;
 }
 
 /** Improve Ajv's union errors without participating in the validity decision. */
 function diagnoseAgentOperation(value: unknown): string {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return 'object expected';
   const root = value as Record<string, unknown>;
-  const extras = Object.keys(root).filter((key) => key !== 'type' && key !== 'operations');
+  const extras = Object.keys(root).filter(
+    (key) => key !== 'type' && key !== 'operations' && key !== 'ceilings',
+  );
   if (extras.length > 0) return `unknown field ${extras.join(', ')}`;
   const operations = root.operations;
   if (typeof operations !== 'object' || operations === null || Array.isArray(operations)) {
@@ -137,7 +164,9 @@ function constraintContained(wider: Constraint, narrower: Constraint): boolean {
  * Every right in `narrower` is in `wider`: each operation exists in the
  * wider item, each argument it names is named there, and each constraint is
  * at least as tight. Dropping operations or arguments narrows. Adding either
- * widens, because an unnamed argument is a denied argument.
+ * widens, because an unnamed argument is a denied argument. A grant ceiling on
+ * the wider operation must be kept, at the same or a lower count; adding a
+ * ceiling narrows.
  */
 export function contains(wider: AgentOperationAccess, narrower: AgentOperationAccess): boolean {
   for (const [op, narrowArgs] of Object.entries(narrower.operations)) {
@@ -146,6 +175,11 @@ export function contains(wider: AgentOperationAccess, narrower: AgentOperationAc
     for (const [name, c] of Object.entries(narrowArgs)) {
       const w = wideArgs[name];
       if (w === undefined || !constraintContained(w, c)) return false;
+    }
+    const wideCeiling = callCeiling(wider, op);
+    if (wideCeiling !== undefined) {
+      const narrowCeiling = callCeiling(narrower, op);
+      if (narrowCeiling === undefined || narrowCeiling > wideCeiling) return false;
     }
   }
   return true;

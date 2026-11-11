@@ -19,6 +19,10 @@ export interface components {
           [key: string]: components['schemas']['Constraint'];
         };
       };
+      /** @description Call ceilings per operation, as in authority.json `Ceilings`. The executor checks them against the grant state record of the root grant. Every key must name an operation in `operations`. */
+      ceilings?: {
+        [key: string]: components['schemas']['CallCeiling'];
+      };
     };
     Scalar: string | number | boolean;
     ExactConstraint: {
@@ -30,6 +34,13 @@ export interface components {
     };
     Constraint:
       components['schemas']['ExactConstraint'] | components['schemas']['WildcardConstraint'];
+    /**
+     * CallCeiling
+     * @description The operation may be invoked at most `calls` times under this grant and everything derived from it. Same as `CallCeiling` in authority.json.
+     */
+    CallCeiling: {
+      calls: number;
+    };
   };
   responses: never;
   parameters: never;

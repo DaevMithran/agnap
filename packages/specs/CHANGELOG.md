@@ -9,6 +9,11 @@ All specification files share the version in `VERSION`.
   is now documented as tests-only.
 - `local-owner.yaml`: `PendingGrant` gains optional `client_display`, the
   client's RFC 9635 `client.display`, unverified.
+- `agent-operation.json`: optional `ceilings`, `{ <operation>: { calls } }`,
+  checked by the executor against the grant state record of the root grant.
+  A narrower item must keep a ceiling no larger than the wider item's.
+- `as.yaml`: `IntrospectionResponse` gains optional `root_grant`, the grant a
+  token's calls are recorded against in the grant state record.
 
 ## 0.2.0
 
