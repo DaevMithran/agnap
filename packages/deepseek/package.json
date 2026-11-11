@@ -1,0 +1,32 @@
+{
+  "name": "@agnap/deepseek",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness pre-execute authorization plugin backed by key-bound GNAP grants.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "examples",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@agnap/access-types": "workspace:*",
+    "@agnap/gnap-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@agnap/gnap-server": "workspace:*"
+  }
+}
