@@ -136,3 +136,30 @@ node packages/executor/examples/canary.mjs        # a stand-in API that logs wha
 environment variable (`env`) or a file (`file`) and are read at call time;
 the config itself cannot contain a secret. Relative paths resolve against the
 config file's directory. Each decision is logged as one JSON line.
+
+## Known limitations and future work
+
+**Credential sources are fixed.** A connector reads its credential through
+`credential.value(request)` on every call, after the call has been checked
+against its grant; `request` names the operation and the root grant. The
+config file accepts only `env` and `file`. The
+executor holds every downstream credential, so it is the highest-value target
+in a deployment. Planned:
+
+- a `CredentialSource` interface with a registry, like connector factories;
+- backends that keep credentials encrypted at rest: envelope encryption with
+  the key-encryption key in AWS KMS, or in OpenBao/Vault Transit;
+- a source that passes `request` to a separate broker, so each decrypt is
+  approved only for a live, signed call that a grant covers.
+
+This follows the token-vault designs in Christian Posta's credential
+injection series on the agentgateway blog
+(<https://agentgateway.dev/blog/2026-08-03-protecting-token-vault-kms-credential-injection/>,
+<https://agentgateway.dev/blog/2026-11-02-protecting-token-vault-openbao-credential-injection/>).
+
+**Downstream ceilings as a backstop.** Where a service can enforce a ceiling
+itself (an Open Payments grant with `debitAmount`, a virtual card), a
+connector should request one downstream credential per root grant carrying
+the grant's ceiling, so the ceiling holds even if the executor is
+compromised. The grant state record stays the source of truth across
+services and subagents.
