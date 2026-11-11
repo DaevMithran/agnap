@@ -8,6 +8,7 @@
 import type { Scalar } from '@agnap/access-types';
 import type {
   Connector,
+  CredentialRequest,
   ConnectorContext,
   ConnectorOutcome,
   JsonValue,
@@ -29,8 +30,12 @@ export interface HttpOperation {
 export interface HttpCredential {
   /** Header to set, for example `authorization`. */
   header: string;
-  /** Resolves the header value at call time, so a rotated secret is picked up. */
-  value: () => string | Promise<string>;
+  /**
+   * Resolves the header value for one call, after the executor has checked
+   * the call against its grant. Called on every call, so a rotated secret is
+   * picked up.
+   */
+  value: (request: CredentialRequest) => string | Promise<string>;
 }
 
 export interface HttpConnectorOptions {
@@ -95,7 +100,14 @@ export class HttpConnector implements Connector {
     const credential = this.#options.credential;
     if (credential !== undefined) {
       try {
-        headers.set(credential.header, await credential.value());
+        headers.set(
+          credential.header,
+          await credential.value({
+            operation: call.operation,
+            rootGrant: context.rootGrant,
+            signal: context.signal,
+          }),
+        );
       } catch (error) {
         // Nothing was sent, so the call had no effect.
         return {

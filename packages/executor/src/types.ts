@@ -40,6 +40,18 @@ export interface Connector {
   call(call: OperationCall, context: ConnectorContext): Promise<ConnectorOutcome>;
 }
 
+/**
+ * The call a credential is requested for. A credential source can use it to
+ * release a secret only for a call the executor has already checked against
+ * its grant, for example by asking a separate broker to approve the decrypt.
+ */
+export interface CredentialRequest {
+  operation: string;
+  /** The root grant the call is counted against. */
+  rootGrant: string | undefined;
+  signal: AbortSignal;
+}
+
 /** One counted ceiling: the calls of one operation under one root grant. */
 export interface GrantStateKey {
   rootGrant: string;

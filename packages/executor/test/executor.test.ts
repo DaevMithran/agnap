@@ -74,6 +74,7 @@ function fixture(options: { downstreamStatus?: (r: Request) => number } = {}) {
   const as = createHandler({ server, store, rsRegistry: registry, publicUrl: ISSUER });
   const downstream = canary(options.downstreamStatus);
   const events: ExecutorEvent[] = [];
+  const credentialRequests: { operation: string; rootGrant: string | undefined }[] = [];
   const executor = createExecutor({
     introspector: new GnapIntrospector({
       issuer: ISSUER,
@@ -84,7 +85,13 @@ function fixture(options: { downstreamStatus?: (r: Request) => number } = {}) {
     connectors: [
       new HttpConnector({
         baseUrl: 'http://canary.test/',
-        credential: { header: 'authorization', value: () => `Bearer ${CREDENTIAL}` },
+        credential: {
+          header: 'authorization',
+          value: ({ operation, rootGrant }) => {
+            credentialRequests.push({ operation, rootGrant });
+            return `Bearer ${CREDENTIAL}`;
+          },
+        },
         fetch: downstream.fetch,
         operations: {
           'github.issues.list': {
@@ -169,7 +176,7 @@ function fixture(options: { downstreamStatus?: (r: Request) => number } = {}) {
     expect(res.status).toBe(204);
   }
 
-  return { executor, downstream, events, grant, call, signedCall, revoke };
+  return { executor, downstream, events, credentialRequests, grant, call, signedCall, revoke };
 }
 
 const docs = (ceiling?: number): AccessItem[] => [
@@ -201,6 +208,10 @@ describe('executor', () => {
         body: '',
         authorization: `Bearer ${CREDENTIAL}`,
       },
+    ]);
+    // The credential is requested only for the checked call, with its root grant.
+    expect(f.credentialRequests).toEqual([
+      { operation: 'github.issues.list', rootGrant: expect.any(String) as unknown },
     ]);
   });
 
@@ -263,6 +274,7 @@ describe('executor', () => {
     });
     expect(unknown.status).toBe(404);
     expect(f.downstream.effects).toEqual([]);
+    expect(f.credentialRequests).toEqual([]);
   });
 
   it('refuses a stolen token signed by another key, a replayed request, and a revoked token', async () => {
