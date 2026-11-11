@@ -11,6 +11,8 @@ export interface NumberedOperation {
   operation: string;
   /** `name = "value"` or `name = any` per argument. */
   constraints: string[];
+  /** The grant's ceiling on this operation, if it sets one. */
+  calls?: number;
 }
 
 const isAgentOperation = (item: AccessItem): item is AgentOperationAccess =>
@@ -32,7 +34,14 @@ export function numberOperations(access: readonly AccessItem[]): NumberedOperati
           ? `${name} = any`
           : `${name} = ${JSON.stringify(constraint.exact)}`,
       );
-      numbered.push({ number: numbered.length + 1, itemIndex, operation, constraints });
+      const calls = item.ceilings?.[operation]?.calls;
+      numbered.push({
+        number: numbered.length + 1,
+        itemIndex,
+        operation,
+        constraints,
+        ...(calls !== undefined ? { calls } : {}),
+      });
     }
   });
   return numbered;
@@ -62,7 +71,9 @@ export function renderGrant(grant: PendingGrant, now = Date.now()): string[] {
   for (const op of operations) {
     const prefix = op.number === 1 ? 'Asks     ' : '         ';
     const args = op.constraints.length > 0 ? `  ${op.constraints.join(', ')}` : '';
-    lines.push(`${prefix}${op.number}. ${op.operation}${args}`);
+    const calls =
+      op.calls !== undefined ? `  (at most ${op.calls} call${op.calls === 1 ? '' : 's'})` : '';
+    lines.push(`${prefix}${op.number}. ${op.operation}${args}${calls}`);
   }
   const other = grant.requested_access.filter((item) => !isAgentOperation(item));
   for (const item of other) lines.push(`Also     ${JSON.stringify(item)}`);
@@ -100,7 +111,11 @@ export function keepOperations(
     const operations = Object.fromEntries(
       Object.entries(item.operations).filter(([name]) => names.has(name)),
     );
-    narrowed.push({ ...item, operations });
+    const narrowedItem: AgentOperationAccess = { ...item, operations };
+    delete narrowedItem.ceilings;
+    const ceilings = Object.entries(item.ceilings ?? {}).filter(([name]) => names.has(name));
+    if (ceilings.length > 0) narrowedItem.ceilings = Object.fromEntries(ceilings);
+    narrowed.push(narrowedItem);
   });
   return narrowed.some(isAgentOperation) ? narrowed : null;
 }

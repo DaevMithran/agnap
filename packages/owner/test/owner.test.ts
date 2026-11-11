@@ -121,6 +121,25 @@ describe('describe', () => {
     ]);
     expect(keepOperations(access, new Set())).toBeNull();
   });
+
+  it('shows grant ceilings and keeps only the ceilings of kept operations', () => {
+    const capped = [
+      {
+        ...access[0]!,
+        ceilings: { 'github.comment.create': { calls: 3 }, 'github.issues.list': { calls: 1 } },
+      },
+    ] as typeof access;
+    const card = renderGrant(pendingGrant({ requested_access: capped }), 1_000).join('\n');
+    expect(card).toContain('github.comment.create  repository = "acme/docs"  (at most 3 calls)');
+    expect(card).toContain('(at most 1 call)');
+    expect(keepOperations(capped, new Set([2]))).toEqual([
+      {
+        type: 'agent_operation',
+        operations: { 'github.comment.create': { repository: { exact: 'acme/docs' } } },
+        ceilings: { 'github.comment.create': { calls: 3 } },
+      },
+    ]);
+  });
 });
 
 describe('rules', () => {
