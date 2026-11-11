@@ -17,3 +17,10 @@ export { MemoryStore } from './store/memory.js';
 export { createHandler, checkBodyLimit } from './http/handler.js';
 export { resolveTargetUri } from './http/body.js';
 export { serve } from './http/node.js';
+export { validateOwnerResolutionResult, validatePendingGrantList } from './schemas/index.js';
+export type {
+  OwnerResolutionBody,
+  OwnerResolutionResultBody,
+  PendingGrant,
+  PendingGrantList,
+} from './schemas/index.js';

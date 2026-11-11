@@ -18,3 +18,9 @@ export const validateOwnerResolutionResult = ajv.compile<
 >({
   $ref: `${SCHEMA_ID}#/$defs/OwnerResolutionResult`,
 });
+
+/** Wire types of the local owner extension, as `GET /local/grants` and `POST /local/grants/{id}` carry them. */
+export type PendingGrant = components['schemas']['PendingGrant'];
+export type PendingGrantList = components['schemas']['PendingGrantList'];
+export type OwnerResolutionBody = components['schemas']['OwnerResolution'];
+export type OwnerResolutionResultBody = components['schemas']['OwnerResolutionResult'];

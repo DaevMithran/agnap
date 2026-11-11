@@ -33,6 +33,19 @@ export const localOwnerSchema = {
         client_thumbprint: {
           type: 'string',
         },
+        client_display: {
+          type: 'object',
+          description: 'RFC 9635 `client.display` as the client stated it. Unverified.',
+          properties: {
+            name: {
+              type: 'string',
+            },
+            uri: {
+              type: 'string',
+            },
+          },
+          additionalProperties: false,
+        },
         requested_access: {
           type: 'array',
           minItems: 1,

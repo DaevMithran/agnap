@@ -5,19 +5,35 @@ import { parseJson } from './body.js';
 import { error, json, respond } from './respond.js';
 import type { Router } from './router.js';
 import { validateOwnerResolution } from '../schemas/index.js';
-import type { RouteDeps } from '../types/http.js';
+import type { RouteContext, RouteDeps } from '../types/http.js';
 import type { OwnerResolution } from '../types/server.js';
 
 export function registerOwnerRoutes(router: Router, deps: RouteDeps): void {
-  if (deps.localOwner === undefined) return;
+  if (deps.localOwner === undefined && deps.owner === undefined) return;
   const { server } = deps;
-  const secret = deps.localOwner.secret;
+  const secret = deps.localOwner?.secret;
   // An empty secret would compare equal to a missing Authorization header.
-  if (secret.length === 0) throw new RangeError('localOwner.secret must not be empty');
+  if (secret !== undefined && secret.length === 0)
+    throw new RangeError('localOwner.secret must not be empty');
 
-  router.get('/local/grants', async ({ request }) => {
-    if (!ownerAuthorized(request, secret))
-      return error(401, 'invalid_request', 'owner secret required');
+  /** Null when the caller is the owner, else the 401 to return. */
+  const authorizeOwner = async (ctx: RouteContext): Promise<Response | null> => {
+    const signed = ctx.request.headers.has('signature-input');
+    if (signed && deps.owner !== undefined) {
+      const result = await deps.authenticate(ctx.signable, deps.owner.key, 'invalid_request');
+      return result instanceof Response ? result : null;
+    }
+    if (!signed && secret !== undefined && bearerMatches(ctx.request, secret)) return null;
+    return error(
+      401,
+      'invalid_request',
+      deps.owner !== undefined ? 'owner signature required' : 'owner secret required',
+    );
+  };
+
+  router.get('/local/grants', async (ctx) => {
+    const denied = await authorizeOwner(ctx);
+    if (denied !== null) return denied;
     const pending = await server.listPending();
     return json(200, {
       grants: pending.map((grant) => ({
@@ -26,24 +42,25 @@ export function registerOwnerRoutes(router: Router, deps: RouteDeps): void {
         expires_at: new Date(grant.expiresAt).toISOString(),
         client_kid: grant.clientKey.kid,
         client_thumbprint: thumbprint(grant.clientKey),
+        ...(grant.clientDisplay !== undefined ? { client_display: grant.clientDisplay } : {}),
         requested_access: grant.requestedAccess,
       })),
     });
   });
 
-  router.post('/local/grants/:id', async ({ request, params, bytes }) => {
-    if (!ownerAuthorized(request, secret))
-      return error(401, 'invalid_request', 'owner secret required');
-    const body = parseJson(bytes);
+  router.post('/local/grants/:id', async (ctx) => {
+    const denied = await authorizeOwner(ctx);
+    if (denied !== null) return denied;
+    const body = parseJson(ctx.bytes);
     if (body === undefined) return error(400, 'invalid_request', 'JSON body expected');
     const resolution = parseOwnerResolution(body);
     if (resolution === null)
       return error(400, 'invalid_request', 'decision must be approve or deny');
-    return respond(await server.resolveGrant(params.id as string, resolution));
+    return respond(await server.resolveGrant(ctx.params.id as string, resolution));
   });
 }
 
-function ownerAuthorized(request: Request, secret: string): boolean {
+function bearerMatches(request: Request, secret: string): boolean {
   const header = request.headers.get('authorization');
   if (header === null || secret.length === 0) return false;
   const presented = header.replace(/^Bearer\s+/i, '');

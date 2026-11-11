@@ -2,6 +2,14 @@
 
 All specification files share the version in `VERSION`.
 
+## Unreleased
+
+- `local-owner.yaml`: requests may be authenticated by an RFC 9421 signature
+  with the owner key (`ownerSignature`) as well as by the shared secret, which
+  is now documented as tests-only.
+- `local-owner.yaml`: `PendingGrant` gains optional `client_display`, the
+  client's RFC 9635 `client.display`, unverified.
+
 ## 0.2.0
 
 `as.yaml` is replaced by the contract of the generic GNAP authorization

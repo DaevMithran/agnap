@@ -67,7 +67,15 @@ Owner approval may drop access objects, operations, or arguments, or replace a
 wildcard with an exact value when the corresponding access-type handler says
 that is narrower. It may never add authority that the client did not request.
 
-The `/local/grants` routes and `gnap-server owner` command are a development
-extension, not GNAP endpoints. The in-memory store and loopback HTTP runner are
-appropriate for tests and demos; production deployments need durable atomic
-storage, HTTPS, real owner interaction, and managed key custody.
+The `/local/grants` routes are an owner extension, not GNAP endpoints. With
+`owner: { key }` (`gnap-server serve --owner-key owner.pub.jwk`) they accept
+only requests signed with that key, under the same RFC 9421 profile and replay
+check as client requests; [`agnap-owner`](../owner/README.md) is the client.
+The pending list includes the client's `client.display` name, which the client
+states and nothing verifies. `localOwner: { secret }` (`GNAP_OWNER_SECRET`, used
+by `gnap-server owner`) accepts a shared bearer secret instead and is for tests:
+whoever can read the secret can approve.
+
+The in-memory store and loopback HTTP runner are appropriate for tests and
+demos; production deployments need durable atomic storage, HTTPS, owner
+authentication beyond a single local key, and managed key custody.

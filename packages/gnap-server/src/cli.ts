@@ -12,14 +12,16 @@ import { MemoryStore } from './store/memory.js';
 import type { ResourceServerEntry } from './types/registry.js';
 
 /**
- * GNAP_OWNER_SECRET=... gnap-server serve --port 4000 --issuer http://127.0.0.1:4000/ --rs-registry rs.json
- *                    [--continue-wait <seconds>]   polling interval for pending grants (default 5)
- * gnap-server owner  list | approve <grant-id> [--access-file f.json] [--audiences rs1,rs2] | deny <grant-id>
- *                    --url http://127.0.0.1:4000 --secret S
+ * gnap-server serve --port 4000 --issuer http://127.0.0.1:4000/ --rs-registry rs.json
+ *                   --owner-key owner.pub.jwk   owner decisions must be signed by this key (agnap-owner)
+ *                   [--continue-wait <seconds>] polling interval for pending grants (default 5)
+ * gnap-server owner list | approve <grant-id> [--access-file f.json] [--audiences rs1,rs2] | deny <grant-id>
+ *                   --url http://127.0.0.1:4000 --secret S
  *
  * `serve` registers the agent_operation access type and waits for the owner
- * on every request. `owner` is the helper that holds the local secret; the
- * client never does.
+ * on every request. With GNAP_OWNER_SECRET set it also accepts the shared
+ * secret, which `owner` uses; that path is for tests, since whoever can read
+ * the secret can approve.
  */
 
 function loadRegistry(path: string | undefined): StaticResourceServerRegistry {
@@ -46,6 +48,7 @@ async function serveCommand(args: string[]): Promise<void> {
       issuer: { type: 'string' },
       'rs-registry': { type: 'string' },
       'continue-wait': { type: 'string' },
+      'owner-key': { type: 'string' },
     },
     strict: true,
   });
@@ -55,6 +58,12 @@ async function serveCommand(args: string[]): Promise<void> {
   const store = new MemoryStore();
   const rsRegistry = loadRegistry(values['rs-registry']);
   const continueWait = values['continue-wait'];
+  const ownerKeyFile = values['owner-key'];
+  const ownerKey =
+    ownerKeyFile === undefined
+      ? undefined
+      : parsePublicJwk(JSON.parse(readFileSync(ownerKeyFile, 'utf8')) as unknown);
+  if (ownerKey === null) throw new Error(`${String(ownerKeyFile)} is not an Ed25519 public JWK`);
   const server = createServer(
     {
       issuer,
@@ -71,10 +80,17 @@ async function serveCommand(args: string[]): Promise<void> {
     rsRegistry,
     publicUrl: issuer,
     ...(secret !== undefined ? { localOwner: { secret } } : {}),
+    ...(ownerKey !== undefined ? { owner: { key: ownerKey } } : {}),
   });
   const running = await serve(handler, { port });
+  const ownerMode = [
+    ownerKey !== undefined ? 'owner-key' : '',
+    secret !== undefined ? 'secret' : '',
+  ]
+    .filter((mode) => mode !== '')
+    .join('+');
   console.log(
-    `gnap-server listening on ${running.url}  issuer=${issuer}  owner-extension=${secret !== undefined ? 'on' : 'off'}`,
+    `gnap-server listening on ${running.url}  issuer=${issuer}  owner=${ownerMode === '' ? 'off' : ownerMode}`,
   );
   if (!issuer.startsWith('https://'))
     console.log('loopback HTTP: fine for development, non-conformant for anything else');

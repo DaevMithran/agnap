@@ -158,6 +158,13 @@ export function createServer(config: ServerConfig, store: Store): GnapServer {
         continuationHash: null,
         notBefore: ctx.now,
       };
+      const display = client.display;
+      if (display?.name !== undefined || display?.uri !== undefined) {
+        grant.clientDisplay = {
+          ...(display.name !== undefined ? { name: display.name } : {}),
+          ...(display.uri !== undefined ? { uri: display.uri } : {}),
+        };
+      }
 
       switch (decision.kind) {
         case 'deny':

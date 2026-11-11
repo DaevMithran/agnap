@@ -10,6 +10,7 @@ export interface RouteDeps {
   rsRegistry: ResourceServerRegistry;
   authenticate: Authenticate;
   localOwner?: { secret: string };
+  owner?: { key: Ed25519PublicJwk };
 }
 
 export interface HandlerOptions {
@@ -23,7 +24,17 @@ export interface HandlerOptions {
    * differ from what the process sees. Set this to the public origin.
    */
   publicUrl?: string;
-  /** Mount the non-RFC owner extension under `/local/grants`, guarded by this secret. */
+  /**
+   * Mount the non-RFC owner extension under `/local/grants`, accepting
+   * requests signed with this owner key (RFC 9421, the same profile and
+   * replay check as client requests). Run the owner's tool in a process the
+   * agent cannot reach.
+   */
+  owner?: { key: Ed25519PublicJwk };
+  /**
+   * Mount the owner extension guarded by a shared bearer secret. Tests only:
+   * whoever can read the secret can approve.
+   */
   localOwner?: { secret: string };
   /** Largest request body accepted on any route, in bytes. Larger bodies are refused with 413 before anything else runs. */
   maxBodyBytes?: number;

@@ -55,6 +55,11 @@ export interface components {
       expires_at: string;
       client_kid: string;
       client_thumbprint: string;
+      /** @description RFC 9635 `client.display` as the client stated it. Unverified. */
+      client_display?: {
+        name?: string;
+        uri?: string;
+      };
       requested_access: components['schemas']['AccessObject'][];
     };
     PendingGrantList: {
@@ -118,7 +123,7 @@ export interface operations {
           'application/json': components['schemas']['PendingGrantList'];
         };
       };
-      /** @description Missing or wrong secret. */
+      /** @description Missing or invalid owner signature or secret. */
       401: {
         headers: {
           [name: string]: unknown;
@@ -162,7 +167,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Missing or wrong secret. */
+      /** @description Missing or invalid owner signature or secret. */
       401: {
         headers: {
           [name: string]: unknown;

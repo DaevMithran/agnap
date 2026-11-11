@@ -8,6 +8,8 @@ export type DenyCode = 'user_denied' | 'request_denied';
 export interface GrantRecord {
   id: string;
   clientKey: Ed25519PublicJwk;
+  /** RFC 9635 §2.3.2 `client.display`, as the client stated it. Unverified; shown to the owner as a label. */
+  clientDisplay?: { name?: string; uri?: string };
   requestedAccess: AccessItem[];
   state: GrantState;
   /** Set when the decision is made. Contained in `requestedAccess`. */

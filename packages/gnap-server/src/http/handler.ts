@@ -42,6 +42,7 @@ export function createHandler(opts: HandlerOptions): FetchHandler {
         : {}),
     }),
     ...(opts.localOwner !== undefined ? { localOwner: opts.localOwner } : {}),
+    ...(opts.owner !== undefined ? { owner: opts.owner } : {}),
   };
   registerRoutes(router, routeDeps);
   registerOwnerRoutes(router, routeDeps);
